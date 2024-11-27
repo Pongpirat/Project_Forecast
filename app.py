@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 
 from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
+from models.arima_model import arima_model  # เพิ่มการนำเข้าโมเดล ARIMA
 from utils.date_converter import convert_thai_date_to_datetime
 
 # ตั้งค่าหน้าเว็บและหัวข้อหลัก
@@ -17,8 +18,7 @@ with st.sidebar:
     st.header("การตั้งค่า")
 
     # กำหนดโฟลเดอร์ที่มีไฟล์ล่วงหน้า
-    preloaded_files_dir = os.path.join(os.getcwd(), 'currency')
-
+    preloaded_files_dir = os.path.join(os.getcwd(), 'currency')  # ใช้โฟลเดอร์ใน Working Directory
     if not os.path.exists(preloaded_files_dir):
         st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'. กรุณาสร้างและเพิ่มไฟล์ CSV ที่ต้องการ.")
         st.stop()
@@ -35,7 +35,7 @@ with st.sidebar:
     st.subheader("เลือกโมเดลสำหรับการทำนาย")
     model_selection = st.radio(
         "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('Exponential Smoothing', 'Moving Average'),
+        ('Exponential Smoothing', 'ARIMA', 'Moving Average'),  # เพิ่ม ARIMA เป็นตัวเลือก
         index=0
     )
 
@@ -43,6 +43,13 @@ with st.sidebar:
     if model_selection == 'Exponential Smoothing':
         st.subheader("ตั้งค่าสำหรับ Exponential Smoothing")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
+    elif model_selection == 'ARIMA':
+        st.subheader("ตั้งค่าสำหรับ ARIMA")
+        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
+        order_p = st.number_input("ระบุค่า p (AR)", min_value=0, value=1)
+        order_d = st.number_input("ระบุค่า d (Differencing)", min_value=0, value=1)
+        order_q = st.number_input("ระบุค่า q (MA)", min_value=0, value=1)
+        arima_order = (order_p, order_d, order_q)
     else:
         days_to_remove = None
 
@@ -69,14 +76,14 @@ with st.spinner('กำลังประมวลผลข้อมูล...'):
 
 # ย้ายการเลือกคอลัมน์ค่าที่ต้องการทำนายไปที่ Sidebar
 value_column = None
-if model_selection == 'Exponential Smoothing' and days_to_remove is not None:
+if model_selection in ['Exponential Smoothing', 'ARIMA'] and days_to_remove is not None:
     # เพิ่ม selectbox ใน Sidebar
     value_column = st.sidebar.selectbox(
         "เลือกคอลัมน์ค่าที่ต้องการทำนาย",
         options=numeric_cols
     )
 
-# หากเลือก Exponential Smoothing ให้ดำเนินการต่อ
+# หากเลือกโมเดลให้ดำเนินการต่อ
 if model_selection == 'Exponential Smoothing':
     if days_to_remove is not None and value_column:
         try:
@@ -89,8 +96,6 @@ if model_selection == 'Exponential Smoothing':
 
             # แสดงผลลัพธ์
             st.subheader("ผลการทำนาย")
-
-            # สร้างกราฟด้วย Plotly
             fig = go.Figure()
 
             # แสดง Actual
@@ -133,6 +138,44 @@ if model_selection == 'Exponential Smoothing':
                 st.dataframe(filtered_comparison, height=300, use_container_width=True)
 
             # แสดงค่า Error Metrics
+            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
+            with col2:
+                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
+            with col3:
+                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
+
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาด: {e}")
+    else:
+        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+
+elif model_selection == 'ARIMA':
+    if days_to_remove is not None and value_column:
+        try:
+            # เรียกใช้โมเดล ARIMA
+            result = arima_model(
+                data=processed_df,
+                value_column=value_column,
+                days_to_remove=int(days_to_remove),
+                order=arima_order
+            )
+
+            # แสดงผลลัพธ์
+            st.subheader("ผลการพยากรณ์ด้วย ARIMA")
+            
+            # แสดงกราฟ Original Data
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.plotly_chart(result['fig_original'], use_container_width=True)
+            with col2:
+                st.plotly_chart(result['fig_forecast'], use_container_width=True)
+            with col3:
+                st.plotly_chart(result['fig_combined'], use_container_width=True)
+
+            # แสดงค่า Accuracy Metrics
             st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
             col1, col2, col3 = st.columns(3)
             with col1:
