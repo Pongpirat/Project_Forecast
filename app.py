@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
 import os
@@ -5,12 +7,13 @@ import plotly.graph_objects as go
 
 from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
-from models.arima_model import arima_model  # เพิ่มการนำเข้าโมเดล ARIMA
+from models.arima_model import arima_model
+from models.moving_average import moving_average_model  # เพิ่มการนำเข้าโมเดล Moving Average
 from utils.date_converter import convert_thai_date_to_datetime
 
 # ตั้งค่าหน้าเว็บและหัวข้อหลัก
 st.set_page_config(page_title="ประมวลผลข้อมูลอัตราแลกเปลี่ยน", layout="wide")
-st.title("การพยากรณ์อัตราแลกเปลี่ยนเงินสกุลบาทไทยเป็น 10 สกุลเงินต่างประเทศที่สำคัญในตลาดส่งออก")
+st.title("Dashboard การพยากรณ์อัตราแลกเปลี่ยนเงินสกุลบาทไทยเป็น 10 สกุลเงินต่างประเทศที่สำคัญในตลาดส่งออก")
 st.markdown("---")
 
 # Sidebar สำหรับเลือกไฟล์และเลือกโมเดล
@@ -22,7 +25,7 @@ with st.sidebar:
     if not os.path.exists(preloaded_files_dir):
         st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'. กรุณาสร้างและเพิ่มไฟล์ CSV ที่ต้องการ.")
         st.stop()
-    
+
     preloaded_files = [f for f in os.listdir(preloaded_files_dir) if f.endswith('.csv')]
     if not preloaded_files:
         st.error(f"ไม่พบไฟล์ CSV ในโฟลเดอร์ '{preloaded_files_dir}'.")
@@ -35,14 +38,20 @@ with st.sidebar:
     st.subheader("เลือกโมเดลสำหรับการทำนาย")
     model_selection = st.radio(
         "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('Exponential Smoothing', 'ARIMA', 'Moving Average'),  # เพิ่ม ARIMA เป็นตัวเลือก
+        ('ARIMA', 'Exponential Smoothing', 'Moving Average'),  # เพิ่ม Moving Average เป็นตัวเลือก
         index=0
     )
 
-    # หากเลือก Exponential Smoothing ให้แสดงตัวเลือกเพิ่มเติม
+    # กำหนดตัวเลือกเพิ่มเติมตามโมเดลที่เลือก
     if model_selection == 'Exponential Smoothing':
         st.subheader("ตั้งค่าสำหรับ Exponential Smoothing")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
+    elif model_selection == 'Moving Average':
+        st.subheader("ตั้งค่าสำหรับ Moving Average")
+        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
+        # กำหนดขนาดหน้าต่างเป็น 7 โดยอัตโนมัติ
+        window_size = 7  # บังคับใช้ขนาดหน้าต่างเป็น 7
+        use_ema = True  # บังคับใช้ EMA เสมอ
     elif model_selection == 'ARIMA':
         st.subheader("ตั้งค่าสำหรับ ARIMA")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
@@ -50,8 +59,6 @@ with st.sidebar:
         order_d = st.number_input("ระบุค่า d (Differencing)", min_value=0, value=1)
         order_q = st.number_input("ระบุค่า q (MA)", min_value=0, value=1)
         arima_order = (order_p, order_d, order_q)
-    else:
-        days_to_remove = None
 
 # โหลดและตรวจสอบไฟล์ที่เลือก
 try:
@@ -76,7 +83,7 @@ with st.spinner('กำลังประมวลผลข้อมูล...'):
 
 # ย้ายการเลือกคอลัมน์ค่าที่ต้องการทำนายไปที่ Sidebar
 value_column = None
-if model_selection in ['Exponential Smoothing', 'ARIMA'] and days_to_remove is not None:
+if model_selection in ['Exponential Smoothing', 'ARIMA', 'Moving Average'] and days_to_remove is not None:
     # เพิ่ม selectbox ใน Sidebar
     value_column = st.sidebar.selectbox(
         "เลือกคอลัมน์ค่าที่ต้องการทำนาย",
@@ -95,7 +102,7 @@ if model_selection == 'Exponential Smoothing':
             )
 
             # แสดงผลลัพธ์
-            st.subheader("ผลการทำนาย")
+            st.subheader("ผลการพยากรณ์ด้วย Exponential Smoothing")
             fig = go.Figure()
 
             # แสดง Actual
@@ -137,7 +144,81 @@ if model_selection == 'Exponential Smoothing':
                 st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
                 st.dataframe(filtered_comparison, height=300, use_container_width=True)
 
-            # แสดงค่า Error Metrics
+            # แสดงค่า Accuracy Metrics
+            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
+            with col2:
+                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
+            with col3:
+                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
+
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาด: {e}")
+    else:
+        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+
+elif model_selection == 'Moving Average':
+    if days_to_remove is not None and value_column:
+        try:
+            # บังคับใช้ EMA และตั้งค่า window_size เป็น 7
+            window_size = 30
+            use_ema = True
+
+            # เรียกใช้โมเดล Moving Average
+            result = moving_average_model(
+                data=processed_df,
+                value_column=value_column,
+                days_to_remove=int(days_to_remove),
+                window_size=window_size,  # บังคับใช้ขนาดหน้าต่างเป็น 7
+                use_ema=use_ema          # บังคับใช้ EMA
+            )
+
+            # แสดงผลลัพธ์
+            st.subheader("ผลการพยากรณ์ด้วย Exponential Moving Average (EMA)")
+            fig = go.Figure()
+
+            # แสดง Actual
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Actual'],
+                mode='lines',
+                name='Actual'
+            ))
+
+            # แสดง Predicted เฉพาะช่วงทำนาย
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Predicted'],
+                mode='lines',
+                name='Predicted'
+            ))
+
+            # ปรับแต่งกราฟ
+            fig.update_layout(
+                title='Actual vs Predicted Exchange Rate',
+                xaxis_title='Date',
+                yaxis_title=value_column,
+                legend=dict(x=0, y=1),
+                hovermode='x unified'
+            )
+
+            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
+            col1, col2 = st.columns([2, 1])  # สามารถปรับขนาดคอลัมน์ได้ตามต้องการ
+
+            with col1:
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                # กรองข้อมูลให้แสดงเฉพาะแถวที่มีค่าจริงและค่าทำนาย
+                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
+
+                # เพิ่ม scroll ให้ตาราง
+                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
+                st.dataframe(filtered_comparison, height=300, use_container_width=True)
+
+            # แสดงค่า Accuracy Metrics
             st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -165,15 +246,46 @@ elif model_selection == 'ARIMA':
 
             # แสดงผลลัพธ์
             st.subheader("ผลการพยากรณ์ด้วย ARIMA")
-            
-            # แสดงกราฟ Original Data
-            col1, col2, col3 = st.columns(3)
+            fig = go.Figure()
+
+            # แสดง Actual
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Actual'],
+                mode='lines',
+                name='Actual'
+            ))
+
+            # แสดง Predicted เฉพาะช่วงทำนาย
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Predicted'],
+                mode='lines',
+                name='Predicted'
+            ))
+
+            # ปรับแต่งกราฟ
+            fig.update_layout(
+                title='Actual vs Predicted Exchange Rate',
+                xaxis_title='Date',
+                yaxis_title=value_column,
+                legend=dict(x=0, y=1),
+                hovermode='x unified'
+            )
+
+            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
+            col1, col2 = st.columns([2, 1])  # สามารถปรับขนาดคอลัมน์ได้ตามต้องการ
+
             with col1:
-                st.plotly_chart(result['fig_original'], use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
+
             with col2:
-                st.plotly_chart(result['fig_forecast'], use_container_width=True)
-            with col3:
-                st.plotly_chart(result['fig_combined'], use_container_width=True)
+                # กรองข้อมูลให้แสดงเฉพาะแถวที่มีค่าจริงและค่าทำนาย
+                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
+
+                # เพิ่ม scroll ให้ตาราง
+                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
+                st.dataframe(filtered_comparison, height=300, use_container_width=True)
 
             # แสดงค่า Accuracy Metrics
             st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
@@ -189,8 +301,3 @@ elif model_selection == 'ARIMA':
             st.error(f"เกิดข้อผิดพลาด: {e}")
     else:
         st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
-
-elif model_selection == 'Moving Average':
-    st.subheader("Moving Average for Exchange Rate Prediction")
-    st.info("กำลังดำเนินการเพิ่มเติมสำหรับโมเดล Moving Average...")
-    st.write("รอการดำเนินการเพิ่มเติมจากคุณ...")
