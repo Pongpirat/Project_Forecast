@@ -55,10 +55,6 @@ with st.sidebar:
     elif model_selection == 'ARIMA':
         st.subheader("ตั้งค่าสำหรับ ARIMA")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
-        order_p = st.number_input("ระบุค่า p (AR)", min_value=0, value=1)
-        order_d = st.number_input("ระบุค่า d (Differencing)", min_value=0, value=1)
-        order_q = st.number_input("ระบุค่า q (MA)", min_value=0, value=1)
-        arima_order = (order_p, order_d, order_q)
 
 # โหลดและตรวจสอบไฟล์ที่เลือก
 try:
@@ -240,8 +236,7 @@ elif model_selection == 'ARIMA':
             result = arima_model(
                 data=processed_df,
                 value_column=value_column,
-                days_to_remove=int(days_to_remove),
-                order=arima_order
+                days_to_remove=int(days_to_remove)
             )
 
             # แสดงผลลัพธ์
