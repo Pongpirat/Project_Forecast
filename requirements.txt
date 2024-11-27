@@ -1,6 +1,6 @@
 setuptools
 wheel
-numpy
+numpy==1.23.5
 pandas
 matplotlib
 plotly
