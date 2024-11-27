@@ -1,8 +1,8 @@
+setuptools
 numpy==1.23.5
 pandas
 matplotlib
 plotly
 statsmodels
 scikit-learn
-pmdarima==1.8.5
-setuptools
+pmdarima
