@@ -36,7 +36,7 @@ with st.sidebar:
     st.subheader("เลือกโมเดลสำหรับการทำนาย")
     model_selection = st.radio(
         "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('Exponential Smoothing', 'Moving Average', 'ARIMA'),
+        ('Exponential Smoothing', 'Moving Average', 'SARIMA'),
         index=0
     )
 
@@ -77,7 +77,7 @@ with st.spinner('กำลังประมวลผลข้อมูล...'):
 
 # ย้ายการเลือกคอลัมน์ค่าที่ต้องการทำนายไปที่ Sidebar
 value_column = None
-if model_selection in ['Exponential Smoothing', 'ARIMA', 'Moving Average'] and days_to_remove is not None:
+if model_selection in ['Exponential Smoothing', 'SARIMA', 'Moving Average'] and days_to_remove is not None:
     # เพิ่ม selectbox ใน Sidebar
     value_column = st.sidebar.selectbox(
         "เลือกคอลัมน์ค่าที่ต้องการทำนาย",
