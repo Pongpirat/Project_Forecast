@@ -1,8 +1,9 @@
-setuptools
+setuptools==75.6.0
+wheel
 numpy==1.23.5
 pandas
 matplotlib
 plotly
 statsmodels
 scikit-learn
---no-binary :all: pmdarima
+pmdarima==1.8.5
