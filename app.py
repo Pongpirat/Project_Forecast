@@ -1,5 +1,3 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import os
@@ -7,8 +5,8 @@ import plotly.graph_objects as go
 
 from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
-from models.arima_model import arima_model
-from models.moving_average import moving_average_model  # เพิ่มการนำเข้าโมเดล Moving Average
+from models.moving_average import moving_average_model
+from models.sarima_model import sarima_model
 from utils.date_converter import convert_thai_date_to_datetime
 
 # ตั้งค่าหน้าเว็บและหัวข้อหลัก
@@ -38,7 +36,7 @@ with st.sidebar:
     st.subheader("เลือกโมเดลสำหรับการทำนาย")
     model_selection = st.radio(
         "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('ARIMA', 'Exponential Smoothing', 'Moving Average'),  # เพิ่ม Moving Average เป็นตัวเลือก
+        ('Exponential Smoothing', 'Moving Average', 'ARIMA'),
         index=0
     )
 
@@ -52,8 +50,8 @@ with st.sidebar:
         # กำหนดขนาดหน้าต่างเป็น 7 โดยอัตโนมัติ
         window_size = 7  # บังคับใช้ขนาดหน้าต่างเป็น 7
         use_ema = True  # บังคับใช้ EMA เสมอ
-    elif model_selection == 'ARIMA':
-        st.subheader("ตั้งค่าสำหรับ ARIMA")
+    elif model_selection == 'SARIMA':
+        st.subheader("ตั้งค่าสำหรับ SARIMA")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
 
 # โหลดและตรวจสอบไฟล์ที่เลือก
@@ -229,39 +227,49 @@ elif model_selection == 'Moving Average':
     else:
         st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
 
-elif model_selection == 'ARIMA':
+elif model_selection == 'SARIMA':
     if days_to_remove is not None and value_column:
         try:
-            # เรียกใช้โมเดล ARIMA
-            result = arima_model(
+            # เรียกใช้โมเดล SARIMA
+            result = sarima_model(
                 data=processed_df,
                 value_column=value_column,
-                days_to_remove=int(days_to_remove)
+                days_to_remove=int(days_to_remove),
+                seasonal_order=(1, 1, 1, 7),  # Weekly seasonality for daily data
+                order=(2, 1, 2)  # ARIMA parameters
             )
 
+            # สร้าง DataFrame สำหรับการแสดงข้อมูลทั้งหมด
+            full_data = processed_df[value_column]
+            forecast_data = result['comparison']['Predicted']
+
+            # เพิ่มช่วงพยากรณ์ไปในข้อมูลเดิม
+            full_data_with_forecast = full_data.copy()
+            full_data_with_forecast.loc[forecast_data.index] = forecast_data
+
             # แสดงผลลัพธ์
-            st.subheader("ผลการพยากรณ์ด้วย ARIMA")
+            st.subheader("ผลการพยากรณ์ด้วย SARIMA")
             fig = go.Figure()
 
-            # แสดง Actual
+            # แสดง Actual (ข้อมูลจริงทั้งหมด)
             fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Actual'],
+                x=full_data.index,
+                y=full_data,
                 mode='lines',
                 name='Actual'
             ))
 
-            # แสดง Predicted เฉพาะช่วงทำนาย
+            # แสดง Predicted (ค่าพยากรณ์เฉพาะช่วงทำนาย)
             fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Predicted'],
+                x=forecast_data.index,
+                y=forecast_data,
                 mode='lines',
                 name='Predicted'
             ))
 
             # ปรับแต่งกราฟ
             fig.update_layout(
-                title='Actual vs Predicted Exchange Rate',
+                title='Actual vs Predicted Exchange Rate (SARIMA)',
                 xaxis_title='Date',
                 yaxis_title=value_column,
                 legend=dict(x=0, y=1),
