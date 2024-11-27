@@ -5,4 +5,4 @@ matplotlib
 plotly
 statsmodels
 scikit-learn
---no-binary :all: pmdarima==1.8.5
+pmdarima==1.8.5
