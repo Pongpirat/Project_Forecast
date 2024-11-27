@@ -6,4 +6,4 @@ matplotlib
 plotly
 statsmodels
 scikit-learn
-pmdarima==1.8.5
+pmdarima==1.8.5 --no-use-pep517
