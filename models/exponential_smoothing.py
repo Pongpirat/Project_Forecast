@@ -1,5 +1,3 @@
-# models/exponential_smoothing.py
-
 import pandas as pd
 import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing

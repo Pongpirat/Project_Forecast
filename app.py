@@ -18,6 +18,7 @@ with st.sidebar:
 
     # กำหนดโฟลเดอร์ที่มีไฟล์ล่วงหน้า
     preloaded_files_dir = os.path.join(os.getcwd(), 'currency')
+
     if not os.path.exists(preloaded_files_dir):
         st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'. กรุณาสร้างและเพิ่มไฟล์ CSV ที่ต้องการ.")
         st.stop()
