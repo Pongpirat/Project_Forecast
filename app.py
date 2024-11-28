@@ -47,9 +47,6 @@ with st.sidebar:
     elif model_selection == 'Moving Average':
         st.subheader("ตั้งค่าสำหรับ Moving Average")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
-        # กำหนดขนาดหน้าต่างเป็น 7 โดยอัตโนมัติ
-        window_size = 7  # บังคับใช้ขนาดหน้าต่างเป็น 7
-        use_ema = True  # บังคับใช้ EMA เสมอ
     elif model_selection == 'SARIMA':
         st.subheader("ตั้งค่าสำหรับ SARIMA")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
