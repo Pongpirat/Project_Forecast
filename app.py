@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
 import os
@@ -7,6 +9,7 @@ from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
 from models.moving_average import moving_average_model
 from models.sarima_model import sarima_model
+from models.lstm_inference import inference_lstm_model  # <-- เพิ่มการ import โมเดล LSTM
 from utils.date_converter import convert_thai_date_to_datetime
 
 # ตั้งค่าหน้าเว็บและหัวข้อหลัก
@@ -36,19 +39,13 @@ with st.sidebar:
     st.subheader("เลือกโมเดลสำหรับการทำนาย")
     model_selection = st.radio(
         "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('Exponential Smoothing', 'Moving Average', 'SARIMA'),
+        ('Exponential Smoothing', 'Moving Average', 'SARIMA', 'LSTM'),  # <-- เพิ่ม 'LSTM'
         index=0
     )
 
     # กำหนดตัวเลือกเพิ่มเติมตามโมเดลที่เลือก
-    if model_selection == 'Exponential Smoothing':
-        st.subheader("ตั้งค่าสำหรับ Exponential Smoothing")
-        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
-    elif model_selection == 'Moving Average':
-        st.subheader("ตั้งค่าสำหรับ Moving Average")
-        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
-    elif model_selection == 'SARIMA':
-        st.subheader("ตั้งค่าสำหรับ SARIMA")
+    if model_selection in ['Exponential Smoothing', 'Moving Average', 'SARIMA', 'LSTM']:
+        st.subheader(f"ตั้งค่าสำหรับ {model_selection}")
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
 
 # โหลดและตรวจสอบไฟล์ที่เลือก
@@ -74,7 +71,7 @@ with st.spinner('กำลังประมวลผลข้อมูล...'):
 
 # ย้ายการเลือกคอลัมน์ค่าที่ต้องการทำนายไปที่ Sidebar
 value_column = None
-if model_selection in ['Exponential Smoothing', 'SARIMA', 'Moving Average'] and days_to_remove is not None:
+if model_selection in ['Exponential Smoothing', 'SARIMA', 'Moving Average', 'LSTM'] and days_to_remove is not None:
     # เพิ่ม selectbox ใน Sidebar
     value_column = st.sidebar.selectbox(
         "เลือกคอลัมน์ค่าที่ต้องการทำนาย",
@@ -153,7 +150,7 @@ if model_selection == 'Exponential Smoothing':
 elif model_selection == 'Moving Average':
     if days_to_remove is not None and value_column:
         try:
-            # บังคับใช้ EMA และตั้งค่า window_size เป็น 7
+            # บังคับใช้ EMA และตั้งค่า window_size เป็น 30
             window_size = 30
             use_ema = True
 
@@ -162,7 +159,7 @@ elif model_selection == 'Moving Average':
                 data=processed_df,
                 value_column=value_column,
                 days_to_remove=int(days_to_remove),
-                window_size=window_size,  # บังคับใช้ขนาดหน้าต่างเป็น 7
+                window_size=window_size,  # บังคับใช้ขนาดหน้าต่างเป็น 30
                 use_ema=use_ema          # บังคับใช้ EMA
             )
 
@@ -284,6 +281,83 @@ elif model_selection == 'SARIMA':
                 filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
 
                 # เพิ่ม scroll ให้ตาราง
+                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
+                st.dataframe(filtered_comparison, height=300, use_container_width=True)
+
+            # แสดงค่า Accuracy Metrics
+            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
+            with col2:
+                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
+            with col3:
+                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
+
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาด: {e}")
+    else:
+        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+
+elif model_selection == 'LSTM':
+    if days_to_remove is not None and value_column:
+        try:
+            # กำหนด path ของไฟล์โมเดลและ scaler ที่ฝึกไว้แล้ว
+            model_path = os.path.join('models', 'lstm_model.h5')
+            scaler_path = os.path.join('models', 'scaler_lstm.pkl')
+
+            # ตรวจสอบว่าไฟล์โมเดลและ scaler มีอยู่จริง
+            if not os.path.exists(model_path):
+                st.error(f"ไม่พบไฟล์โมเดล LSTM ที่ `{model_path}`")
+                st.stop()
+            if not os.path.exists(scaler_path):
+                st.error(f"ไม่พบไฟล์ Scaler ที่ `{scaler_path}`")
+                st.stop()
+
+            # เรียกใช้โมเดล LSTM (Inference เท่านั้น)
+            result = inference_lstm_model(
+                data=processed_df,
+                value_column=value_column,
+                days_to_remove=int(days_to_remove),
+                model_path=model_path,
+                scaler_path=scaler_path,
+                window_size=30  # ต้องตรงกับ window_size ตอนฝึกโมเดล
+            )
+
+            # แสดงผลลัพธ์ (กราฟ + ตาราง + metrics)
+            st.subheader("ผลการพยากรณ์ด้วย LSTM (โหลดโมเดลที่ฝึกแล้ว)")
+            fig = go.Figure()
+
+            # แสดง Actual
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Actual'],
+                mode='lines',
+                name='Actual'
+            ))
+
+            # แสดง Predicted
+            fig.add_trace(go.Scatter(
+                x=result['comparison'].index,
+                y=result['comparison']['Predicted'],
+                mode='lines',
+                name='Predicted'
+            ))
+
+            fig.update_layout(
+                title='Actual vs Predicted (LSTM)',
+                xaxis_title='Date',
+                yaxis_title=value_column,
+                legend=dict(x=0, y=1),
+                hovermode='x unified'
+            )
+
+            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
                 st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
                 st.dataframe(filtered_comparison, height=300, use_container_width=True)
 

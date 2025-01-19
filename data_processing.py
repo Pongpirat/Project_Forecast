@@ -1,5 +1,4 @@
 import pandas as pd
-import streamlit as st
 from utils.date_converter import convert_thai_date_to_datetime
 
 def process_data(df):
@@ -7,8 +6,8 @@ def process_data(df):
         # แปลงวันที่
         df['งวด'] = df['งวด'].apply(convert_thai_date_to_datetime)
     except ValueError as e:
-        st.error(f"การแปลงวันที่ล้มเหลว: {e}")
-        st.stop()  # หยุดการทำงานของ Streamlit
+        print(f"Error converting date: {e}")
+        raise e  # ยกเลิกการทำงานของสคริปต์หากเกิดข้อผิดพลาดในการแปลงวันที่
 
     # ลบแถวที่วันที่ไม่สามารถแปลงได้
     df = df.dropna(subset=['งวด'])
@@ -28,10 +27,9 @@ def process_data(df):
     df = df.reindex(full_date_range)
     df.index.name = 'งวด'
 
-    # ใช้ interpolation เพื่อเติมข้อมูลที่ขาด
-    df.interpolate(method='linear', inplace=True)
-
-    # เติมค่า NaN ที่ยังขาดด้วยการ back-fill (เติมค่าจากวันที่ถัดไป)
+    # เติมข้อมูลที่ขาดหายไปด้วยข้อมูลล่าสุดที่มี (forward-fill)
+    df.fillna(method='ffill', inplace=True)
+    # หากจุดแรกสุดไม่มีข้อมูลใด ๆ ก็ใช้ back-fill เติมให้ครบได้
     df.fillna(method='bfill', inplace=True)
 
     # ปัดเศษค่าทศนิยมให้ตรงกับข้อมูลต้นฉบับ (สมมติว่ามี 4 ตำแหน่งทศนิยม)
