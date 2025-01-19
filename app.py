@@ -1,5 +1,3 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import os
@@ -9,369 +7,182 @@ from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
 from models.moving_average import moving_average_model
 from models.sarima_model import sarima_model
-from models.lstm_inference import inference_lstm_model  # <-- เพิ่มการ import โมเดล LSTM
-from utils.date_converter import convert_thai_date_to_datetime
+from models.lstm_inference import inference_lstm_model
 
-# ตั้งค่าหน้าเว็บและหัวข้อหลัก
-st.set_page_config(page_title="ประมวลผลข้อมูลอัตราแลกเปลี่ยน", layout="wide")
-st.title("Dashboard การพยากรณ์อัตราแลกเปลี่ยนเงินสกุลบาทไทยเป็น 10 สกุลเงินต่างประเทศที่สำคัญในตลาดส่งออก")
-st.markdown("---")
+def main():
+    st.set_page_config(page_title="Compare All Models", layout="wide")
+    st.title("Dashboard เปรียบเทียบการพยากรณ์จากทุกโมเดลในหน้าเดียว")
+    st.markdown("---")
 
-# Sidebar สำหรับเลือกไฟล์และเลือกโมเดล
-with st.sidebar:
-    st.header("การตั้งค่า")
+    # ---------- Sidebar: เลือกไฟล์ CSV & กำหนด Days to Remove ----------
+    with st.sidebar:
+        st.header("การตั้งค่า")
 
-    # กำหนดโฟลเดอร์ที่มีไฟล์ล่วงหน้า
-    preloaded_files_dir = os.path.join(os.getcwd(), 'currency')  # ใช้โฟลเดอร์ใน Working Directory
-    if not os.path.exists(preloaded_files_dir):
-        st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'. กรุณาสร้างและเพิ่มไฟล์ CSV ที่ต้องการ.")
-        st.stop()
+        preloaded_files_dir = os.path.join(os.getcwd(), 'currency')
+        if not os.path.exists(preloaded_files_dir):
+            st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'")
+            st.stop()
 
-    preloaded_files = [f for f in os.listdir(preloaded_files_dir) if f.endswith('.csv')]
-    if not preloaded_files:
-        st.error(f"ไม่พบไฟล์ CSV ในโฟลเดอร์ '{preloaded_files_dir}'.")
-        st.stop()
+        preloaded_files = [f for f in os.listdir(preloaded_files_dir) if f.endswith('.csv')]
+        if not preloaded_files:
+            st.error(f"ไม่พบไฟล์ CSV ในโฟลเดอร์ '{preloaded_files_dir}'")
+            st.stop()
 
-    selected_preloaded_file = st.selectbox("เลือกไฟล์จากไฟล์ที่มีอยู่แล้ว", preloaded_files)
-    preloaded_file_path = os.path.join(preloaded_files_dir, selected_preloaded_file)
+        selected_preloaded_file = st.selectbox("เลือกไฟล์ CSV", preloaded_files)
+        preloaded_file_path = os.path.join(preloaded_files_dir, selected_preloaded_file)
+        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกทดสอบ", min_value=1, value=30)
 
-    # เลือกโมเดลสำหรับการทำนาย
-    st.subheader("เลือกโมเดลสำหรับการทำนาย")
-    model_selection = st.radio(
-        "กรุณาเลือกโมเดลที่ต้องการใช้งาน:",
-        ('Exponential Smoothing', 'Moving Average', 'SARIMA', 'LSTM'),  # <-- เพิ่ม 'LSTM'
-        index=0
-    )
-
-    # กำหนดตัวเลือกเพิ่มเติมตามโมเดลที่เลือก
-    if model_selection in ['Exponential Smoothing', 'Moving Average', 'SARIMA', 'LSTM']:
-        st.subheader(f"ตั้งค่าสำหรับ {model_selection}")
-        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบ", min_value=1, value=30)
-
-# โหลดและตรวจสอบไฟล์ที่เลือก
-try:
-    # พยายามอ่านไฟล์ที่มีไว้ล่วงหน้าด้วย encoding 'utf-8'
-    df = pd.read_csv(preloaded_file_path, encoding='utf-8')
-except UnicodeDecodeError:
-    # หากอ่านด้วย utf-8 ไม่ได้ ลองใช้ 'cp874'
+    # ---------- โหลดและตรวจสอบไฟล์ CSV ----------
     try:
-        df = pd.read_csv(preloaded_file_path, encoding='cp874')
-    except Exception as e:
-        st.error(f"ไม่สามารถอ่านไฟล์ได้: {e}")
+        df = pd.read_csv(preloaded_file_path, encoding='utf-8')
+    except UnicodeDecodeError:
+        try:
+            df = pd.read_csv(preloaded_file_path, encoding='cp874')
+        except Exception as e:
+            st.error(f"ไม่สามารถอ่านไฟล์ได้: {e}")
+            st.stop()
+
+    if 'งวด' not in df.columns:
+        st.error("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
         st.stop()
 
-# ตรวจสอบว่ามีคอลัมน์ 'งวด' หรือไม่
-if 'งวด' not in df.columns:
-    st.error("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
-    st.stop()
+    # ---------- ประมวลผลข้อมูล (Process Data) ----------
+    with st.spinner('กำลังประมวลผลข้อมูล...'):
+        processed_df, numeric_cols = process_data(df)
 
-# ประมวลผลข้อมูล
-with st.spinner('กำลังประมวลผลข้อมูล...'):
-    processed_df, numeric_cols = process_data(df)
+    # ---------- เลือกคอลัมน์ที่ต้องการพยากรณ์ ----------
+    value_column = st.sidebar.selectbox("เลือกคอลัมน์ค่าที่ต้องการทำนาย", options=numeric_cols)
 
-# ย้ายการเลือกคอลัมน์ค่าที่ต้องการทำนายไปที่ Sidebar
-value_column = None
-if model_selection in ['Exponential Smoothing', 'SARIMA', 'Moving Average', 'LSTM'] and days_to_remove is not None:
-    # เพิ่ม selectbox ใน Sidebar
-    value_column = st.sidebar.selectbox(
-        "เลือกคอลัมน์ค่าที่ต้องการทำนาย",
-        options=numeric_cols
-    )
+    if not value_column:
+        st.warning("กรุณาเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+        st.stop()
 
-# หากเลือกโมเดลให้ดำเนินการต่อ
-if model_selection == 'Exponential Smoothing':
-    if days_to_remove is not None and value_column:
+    # ---------- สร้าง Dictionary เก็บผลลัพธ์ของแต่ละโมเดล ----------
+    results = {}
+    
+    # ---------- 1) Exponential Smoothing ----------
+    with st.spinner("กำลังรันโมเดล Exponential Smoothing..."):
         try:
-            # เรียกใช้โมเดล Exponential Smoothing
-            result = exponential_smoothing_model(
+            exp_result = exponential_smoothing_model(
                 data=processed_df,
                 value_column=value_column,
                 days_to_remove=int(days_to_remove)
             )
-
-            # แสดงผลลัพธ์
-            st.subheader("ผลการพยากรณ์ด้วย Exponential Smoothing")
-            fig = go.Figure()
-
-            # แสดง Actual
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Actual'],
-                mode='lines',
-                name='Actual'
-            ))
-
-            # แสดง Predicted เฉพาะช่วงทำนาย
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Predicted'],
-                mode='lines',
-                name='Predicted'
-            ))
-
-            # ปรับแต่งกราฟ
-            fig.update_layout(
-                title='Actual vs Predicted Exchange Rate',
-                xaxis_title='Date',
-                yaxis_title='Exchange Rate',
-                legend=dict(x=0, y=1),
-                hovermode='x unified'
-            )
-
-            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
-            col1, col2 = st.columns([2, 1])  # สามารถปรับขนาดคอลัมน์ได้ตามต้องการ
-
-            with col1:
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col2:
-                # กรองข้อมูลให้แสดงเฉพาะแถวที่มีค่าจริงและค่าทำนาย
-                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
-
-                # เพิ่ม scroll ให้ตาราง
-                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
-                st.dataframe(filtered_comparison, height=300, use_container_width=True)
-
-            # แสดงค่า Accuracy Metrics
-            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
-            with col2:
-                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
-            with col3:
-                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
-
+            results['Exponential Smoothing'] = exp_result
         except Exception as e:
-            st.error(f"เกิดข้อผิดพลาด: {e}")
-    else:
-        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+            st.error(f"เกิดข้อผิดพลาดใน Exponential Smoothing: {e}")
 
-elif model_selection == 'Moving Average':
-    if days_to_remove is not None and value_column:
+    # ---------- 2) Moving Average (EMA) ----------
+    with st.spinner("กำลังรันโมเดล Moving Average..."):
         try:
-            # บังคับใช้ EMA และตั้งค่า window_size เป็น 30
-            window_size = 30
-            use_ema = True
-
-            # เรียกใช้โมเดล Moving Average
-            result = moving_average_model(
+            ma_result = moving_average_model(
                 data=processed_df,
                 value_column=value_column,
                 days_to_remove=int(days_to_remove),
-                window_size=window_size,  # บังคับใช้ขนาดหน้าต่างเป็น 30
-                use_ema=use_ema          # บังคับใช้ EMA
+                window_size=30,  # สามารถปรับได้
+                use_ema=True
             )
-
-            # แสดงผลลัพธ์
-            st.subheader("ผลการพยากรณ์ด้วย Exponential Moving Average (EMA)")
-            fig = go.Figure()
-
-            # แสดง Actual
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Actual'],
-                mode='lines',
-                name='Actual'
-            ))
-
-            # แสดง Predicted เฉพาะช่วงทำนาย
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Predicted'],
-                mode='lines',
-                name='Predicted'
-            ))
-
-            # ปรับแต่งกราฟ
-            fig.update_layout(
-                title='Actual vs Predicted Exchange Rate',
-                xaxis_title='Date',
-                yaxis_title=value_column,
-                legend=dict(x=0, y=1),
-                hovermode='x unified'
-            )
-
-            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
-            col1, col2 = st.columns([2, 1])  # สามารถปรับขนาดคอลัมน์ได้ตามต้องการ
-
-            with col1:
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col2:
-                # กรองข้อมูลให้แสดงเฉพาะแถวที่มีค่าจริงและค่าทำนาย
-                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
-
-                # เพิ่ม scroll ให้ตาราง
-                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
-                st.dataframe(filtered_comparison, height=300, use_container_width=True)
-
-            # แสดงค่า Accuracy Metrics
-            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
-            with col2:
-                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
-            with col3:
-                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
-
+            results['Moving Average (EMA)'] = ma_result
         except Exception as e:
-            st.error(f"เกิดข้อผิดพลาด: {e}")
-    else:
-        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+            st.error(f"เกิดข้อผิดพลาดใน Moving Average: {e}")
 
-elif model_selection == 'SARIMA':
-    if days_to_remove is not None and value_column:
+    # ---------- 3) SARIMA ----------
+    with st.spinner("กำลังรันโมเดล SARIMA..."):
         try:
-            # เรียกใช้โมเดล SARIMA
-            result = sarima_model(
+            sarima_result = sarima_model(
                 data=processed_df,
                 value_column=value_column,
                 days_to_remove=int(days_to_remove),
-                seasonal_order=(1, 1, 1, 7),  # Weekly seasonality for daily data
-                order=(2, 1, 2)  # ARIMA parameters
+                seasonal_order=(1, 1, 1, 7),
+                order=(2, 1, 2)
             )
-
-            # สร้าง DataFrame สำหรับการแสดงข้อมูลทั้งหมด
-            full_data = processed_df[value_column]
-            forecast_data = result['comparison']['Predicted']
-
-            # เพิ่มช่วงพยากรณ์ไปในข้อมูลเดิม
-            full_data_with_forecast = full_data.copy()
-            full_data_with_forecast.loc[forecast_data.index] = forecast_data
-
-            # แสดงผลลัพธ์
-            st.subheader("ผลการพยากรณ์ด้วย SARIMA")
-            fig = go.Figure()
-
-            # แสดง Actual (ข้อมูลจริงทั้งหมด)
-            fig.add_trace(go.Scatter(
-                x=full_data.index,
-                y=full_data,
-                mode='lines',
-                name='Actual'
-            ))
-
-            # แสดง Predicted (ค่าพยากรณ์เฉพาะช่วงทำนาย)
-            fig.add_trace(go.Scatter(
-                x=forecast_data.index,
-                y=forecast_data,
-                mode='lines',
-                name='Predicted'
-            ))
-
-            # ปรับแต่งกราฟ
-            fig.update_layout(
-                title='Actual vs Predicted Exchange Rate (SARIMA)',
-                xaxis_title='Date',
-                yaxis_title=value_column,
-                legend=dict(x=0, y=1),
-                hovermode='x unified'
-            )
-
-            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
-            col1, col2 = st.columns([2, 1])  # สามารถปรับขนาดคอลัมน์ได้ตามต้องการ
-
-            with col1:
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col2:
-                # กรองข้อมูลให้แสดงเฉพาะแถวที่มีค่าจริงและค่าทำนาย
-                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
-
-                # เพิ่ม scroll ให้ตาราง
-                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
-                st.dataframe(filtered_comparison, height=300, use_container_width=True)
-
-            # แสดงค่า Accuracy Metrics
-            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
-            with col2:
-                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
-            with col3:
-                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
-
+            results['SARIMA'] = sarima_result
         except Exception as e:
-            st.error(f"เกิดข้อผิดพลาด: {e}")
-    else:
-        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+            st.error(f"เกิดข้อผิดพลาดใน SARIMA: {e}")
 
-elif model_selection == 'LSTM':
-    if days_to_remove is not None and value_column:
-        try:
-            # กำหนด path ของไฟล์โมเดลและ scaler ที่ฝึกไว้แล้ว
-            model_path = os.path.join('models', 'lstm_model.h5')
-            scaler_path = os.path.join('models', 'scaler_lstm.pkl')
+    # ---------- 4) LSTM ----------
+    with st.spinner("กำลังรันโมเดล LSTM..."):
+        # กำหนด path ของไฟล์โมเดลและ scaler
+        model_path = os.path.join('models', 'lstm_model.h5')
+        scaler_path = os.path.join('models', 'scaler_lstm.pkl')
 
-            # ตรวจสอบว่าไฟล์โมเดลและ scaler มีอยู่จริง
-            if not os.path.exists(model_path):
-                st.error(f"ไม่พบไฟล์โมเดล LSTM ที่ `{model_path}`")
-                st.stop()
-            if not os.path.exists(scaler_path):
-                st.error(f"ไม่พบไฟล์ Scaler ที่ `{scaler_path}`")
-                st.stop()
+        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+            st.warning("ไม่พบไฟล์โมเดล LSTM หรือ Scaler. กรุณาฝึกโมเดล LSTM ให้เรียบร้อยก่อน.")
+        else:
+            try:
+                lstm_result = inference_lstm_model(
+                    data=processed_df,
+                    value_column=value_column,
+                    days_to_remove=int(days_to_remove),
+                    model_path=model_path,
+                    scaler_path=scaler_path,
+                    window_size=30  # ต้องตรงกับขณะที่เทรน
+                )
+                results['LSTM'] = lstm_result
+            except Exception as e:
+                st.error(f"เกิดข้อผิดพลาดใน LSTM: {e}")
 
-            # เรียกใช้โมเดล LSTM (Inference เท่านั้น)
-            result = inference_lstm_model(
-                data=processed_df,
-                value_column=value_column,
-                days_to_remove=int(days_to_remove),
-                model_path=model_path,
-                scaler_path=scaler_path,
-                window_size=30  # ต้องตรงกับ window_size ตอนฝึกโมเดล
-            )
+    # ---------- ตรวจสอบว่ามีโมเดลใดบ้างที่รันสำเร็จ ----------
+    if not results:
+        st.error("ไม่พบผลลัพธ์จากโมเดลใดเลย")
+        st.stop()
 
-            # แสดงผลลัพธ์ (กราฟ + ตาราง + metrics)
-            st.subheader("ผลการพยากรณ์ด้วย LSTM (โหลดโมเดลที่ฝึกแล้ว)")
-            fig = go.Figure()
+    # ---------- สร้างกราฟเปรียบเทียบ ----------
+    st.subheader("เปรียบเทียบ Actual vs Predicted ของทุกโมเดล")
 
-            # แสดง Actual
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Actual'],
-                mode='lines',
-                name='Actual'
-            ))
+    fig = go.Figure()
 
-            # แสดง Predicted
-            fig.add_trace(go.Scatter(
-                x=result['comparison'].index,
-                y=result['comparison']['Predicted'],
-                mode='lines',
-                name='Predicted'
-            ))
+    # 1) Plot เส้น Actual เต็มช่วง
+    actual_series = processed_df[value_column]
+    fig.add_trace(go.Scatter(
+        x=actual_series.index,
+        y=actual_series,
+        mode='lines',
+        name='Actual',
+        line=dict(color='black')
+    ))
 
-            fig.update_layout(
-                title='Actual vs Predicted (LSTM)',
-                xaxis_title='Date',
-                yaxis_title=value_column,
-                legend=dict(x=0, y=1),
-                hovermode='x unified'
-            )
+    # 2) Plot เส้น Predicted ของแต่ละโมเดล
+    for model_name, result_data in results.items():
+        comp_df = result_data['comparison']
+        fig.add_trace(go.Scatter(
+            x=comp_df.index,
+            y=comp_df['Predicted'],
+            mode='lines',
+            name=f'Predicted ({model_name})'
+        ))
 
-            # สร้างแถวคอลัมน์สำหรับกราฟและตาราง
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.plotly_chart(fig, use_container_width=True)
-            with col2:
-                filtered_comparison = result['comparison'].dropna(subset=['Actual', 'Predicted'])
-                st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
-                st.dataframe(filtered_comparison, height=300, use_container_width=True)
+    fig.update_layout(
+        title='Actual vs Predicted (All Models)',
+        xaxis_title='Date',
+        yaxis_title=value_column,
+        legend=dict(x=0, y=1),
+        hovermode='x unified'
+    )
 
-            # แสดงค่า Accuracy Metrics
-            st.header("ผลค่าความแม่นยำในช่วงที่ลบข้อมูล", divider='gray')
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(label="**Mean Absolute Error (MAE)**", value=f"{result['mae']:.4f}")
-            with col2:
-                st.metric(label="**Root Mean Square Error (RMSE)**", value=f"{result['rmse']:.4f}")
-            with col3:
-                st.metric(label="**Mean Absolute Percentage Error (MAPE)**", value=f"{result['mape']:.2f}%")
+    st.plotly_chart(fig, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาด: {e}")
-    else:
-        st.warning("กรุณาระบุจำนวนวันที่ต้องการแยกสำหรับการทดสอบและเลือกคอลัมน์ค่าที่ต้องการทำนาย")
+    # ---------- สร้างตาราง Metrics เปรียบเทียบ ----------
+    st.subheader("ตารางเปรียบเทียบ Metrics (MAE, RMSE, MAPE)")
+    metrics_data = []
+    for model_name, result_data in results.items():
+        row = {
+            'Model': model_name,
+            'MAE': result_data['mae'],
+            'RMSE': result_data['rmse'],
+            'MAPE': result_data['mape']
+        }
+        metrics_data.append(row)
+
+    metrics_df = pd.DataFrame(metrics_data)
+    st.dataframe(metrics_df, use_container_width=True)
+
+    # ---------- แสดงตารางเปรียบเทียบ Actual vs Predicted (แบบเต็ม) ----------
+    st.subheader("ตารางเปรียบเทียบ Actual vs Predicted แยกตามโมเดล")
+    for model_name, result_data in results.items():
+        st.markdown(f"**{model_name}**")
+        comp_df = result_data['comparison'].dropna(subset=['Actual', 'Predicted'])
+        st.dataframe(comp_df, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
