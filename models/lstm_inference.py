@@ -1,68 +1,129 @@
-# models/lstm_inference.py
-
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import load_model
 import joblib
-import streamlit as st
+from tensorflow.keras.models import load_model
 
 def inference_lstm_model(
-    data,           # DataFrame ที่ผ่านการ process_data (และเติมวันที่) แล้ว
-    value_column,   # ชื่อคอลัมน์ที่ต้องการทำนาย
-    days_to_remove, # จำนวนวันที่จะกันไว้ทดสอบ
-    model_path,     # path ของไฟล์ .h5 ที่ฝึกมาแล้ว
-    scaler_path,    # path ของไฟล์ scaler .pkl
-    window_size=30  # ต้องตรงกับ window_size ที่ใช้ตอนฝึก
+    data,
+    value_column,
+    days_to_remove,
+    model_path,
+    scaler_path,
+    window_size,
+    forecast_days=0  # จำนวนวันที่ต้องการพยากรณ์อนาคต
 ):
-    try:
-        # 1) โหลดโมเดลและ scaler
-        model = load_model(model_path)
-        scaler = joblib.load(scaler_path)
+    """
+    Inference แบบ Bulk Predict และ Forecast Future Days
+    """
+    # ---------- 1) โหลด Scaler ----------
+    scaler = joblib.load(scaler_path)
 
-        # 2) เตรียมข้อมูล
-        series_data = data[value_column].values.reshape(-1, 1)
-        scaled_data = scaler.transform(series_data)
+    # ---------- 2) เลือกฟีเจอร์ [value_column, 'diff_1', 'diff_7']
+    feature_cols = [value_column, 'diff_1', 'diff_7']
+    df_features = data[feature_cols].copy()
 
-        # แยก train / test (สำหรับแสดงผลเปรียบเทียบ)
-        train_data = scaled_data[:-days_to_remove]
-        test_data = scaled_data[-days_to_remove:]
+    # ---------- 3) สเกลข้อมูล ----------
+    scaled_data = scaler.transform(df_features)
+    scaled_df = pd.DataFrame(scaled_data, index=df_features.index, columns=df_features.columns)
 
-        # 3) สร้าง sequence สุดท้ายจาก Train เพื่อใช้ทำนายแบบ walk-forward
-        #    (เอาตัวท้ายของ train_data = window_size จุด)
-        last_sequence = train_data[-window_size:]  # shape (window_size, 1)
+    # ---------- 4) โหลดโมเดล LSTM ----------
+    model = load_model(model_path)
 
-        predictions = []
-        for i in range(days_to_remove):
-            # reshape เป็น (1, window_size, 1)
-            input_seq = last_sequence.reshape(1, window_size, 1)
-            pred = model.predict(input_seq)
-            predictions.append(pred[0][0])
-            # อัปเดต sequence ด้วยค่าที่พยากรณ์
-            last_sequence = np.append(last_sequence[1:], pred, axis=0)
+    # ---------- 5) สร้าง sequence ทั้งหมด ----------
+    X_test, y_test = [], []
+    for i in range(window_size, len(scaled_df)):
+        X_test.append(scaled_df.iloc[i-window_size:i].values)
+        y_test.append(scaled_df.iloc[i][value_column])
+    X_test = np.array(X_test)
+    y_test = np.array(y_test)
 
-        # แปลงค่าพยากรณ์กลับไปเป็นสเกลเดิม
-        predictions_inversed = scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).ravel()
-        actual_inversed = scaler.inverse_transform(test_data).ravel()
+    # ---------- 6) เอาเฉพาะ days_to_remove ช่วงท้าย ----------
+    X_test_set = X_test[-days_to_remove:]
+    y_test_set = y_test[-days_to_remove:]
+    test_dates = data.index[-days_to_remove:]
 
-        # 4) สร้าง DataFrame เปรียบเทียบ
-        comparison = pd.DataFrame({
-            "Actual": actual_inversed,
-            "Predicted": predictions_inversed
-        }, index=data.index[-days_to_remove:])
+    # ---------- 7) ทำนาย ----------
+    predictions_scaled = model.predict(X_test_set).ravel()
 
-        # 5) คำนวณ Metrics
-        mae = mean_absolute_error(actual_inversed, predictions_inversed)
-        rmse = np.sqrt(mean_squared_error(actual_inversed, predictions_inversed))
-        mape = np.mean(np.abs((actual_inversed - predictions_inversed) / actual_inversed)) * 100
+    # ---------- 8) Inverse Transform ----------
+    target_idx = feature_cols.index(value_column)
+    predictions_full = np.zeros((days_to_remove, len(feature_cols)))
+    predictions_full[:, target_idx] = predictions_scaled
 
-        return {
-            "comparison": comparison,
-            "mae": mae,
-            "rmse": rmse,
-            "mape": mape
-        }
+    y_test_full = np.zeros((days_to_remove, len(feature_cols)))
+    y_test_full[:, target_idx] = y_test_set
 
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาดขณะทำ Inference LSTM: {e}")
-        raise e
+    predictions_inversed = scaler.inverse_transform(predictions_full)[:, target_idx]
+    actual_inversed = scaler.inverse_transform(y_test_full)[:, target_idx]
+
+    # ---------- 9) สร้าง DataFrame เปรียบเทียบ ----------
+    comparison = pd.DataFrame({
+        'Actual': actual_inversed,
+        'Predicted': predictions_inversed
+    }, index=test_dates)
+
+    # ---------- 10) คำนวณ Metrics ----------
+    mae = np.mean(np.abs(comparison['Actual'] - comparison['Predicted']))
+    rmse = np.sqrt(np.mean((comparison['Actual'] - comparison['Predicted'])**2))
+    mape = np.mean(np.abs((comparison['Actual'] - comparison['Predicted']) / comparison['Actual'])) * 100
+
+    # ---------- 11) Forecast Future Days ----------
+    if forecast_days > 0:
+        # Initialize list to collect future predictions
+        future_predictions_scaled = []
+        future_dates = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=forecast_days, freq='D')
+
+        # Start with the last window_size rows from scaled_df
+        last_sequence = scaled_df.iloc[-window_size:].copy()
+
+        for i in range(forecast_days):
+            # Prepare input sequence
+            input_seq = last_sequence.values.reshape(1, window_size, len(feature_cols))
+
+            # Predict
+            pred_scaled = model.predict(input_seq)[0][0]
+            future_predictions_scaled.append(pred_scaled)
+
+            # Update diff features based on the prediction
+            # diff_1 = pred(t) - pred(t-1)
+            new_diff_1 = pred_scaled - last_sequence.iloc[-1][value_column]
+
+            # diff_7 = pred(t) - pred(t-7)
+            if window_size >= 7:
+                new_diff_7 = pred_scaled - last_sequence.iloc[-7][value_column]
+            else:
+                new_diff_7 = 0  # fallback
+
+            # Create new row
+            new_row = [pred_scaled, new_diff_1, new_diff_7]
+
+            # Append new row to the sequence and drop the first row to maintain window_size
+            new_row_df = pd.DataFrame([new_row], columns=feature_cols, index=[future_dates[i]])
+            last_sequence = pd.concat([last_sequence, new_row_df]).iloc[-window_size:]
+
+        # Convert predictions_scaled to inverse transformed values
+        future_predictions_full = np.zeros((forecast_days, len(feature_cols)))
+        future_predictions_full[:, target_idx] = future_predictions_scaled
+        future_predictions_inversed = scaler.inverse_transform(future_predictions_full)[:, target_idx]
+
+        # Create DataFrame for future predictions
+        future_comparison = pd.DataFrame({
+            'Predicted': future_predictions_inversed
+        }, index=future_dates)
+
+        # Add future predictions to result
+        comparison = comparison.append(future_comparison)
+
+    # ---------- 12) สร้างผลลัพธ์ ----------
+    result = {
+        'comparison': comparison,
+        'mae': mae,
+        'rmse': rmse,
+        'mape': mape
+    }
+
+    if forecast_days > 0:
+        future_comparison = comparison.iloc[-forecast_days:]
+        result['future_predictions'] = future_comparison
+
+    return result
