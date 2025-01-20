@@ -37,14 +37,12 @@ def process_data(df, value_column):
     decimal_places = 4
     df[numeric_columns] = df[numeric_columns].round(decimal_places)
 
-    # ----- 1) เพิ่มฟีเจอร์ Difference -----
-    # diff_1 = การเปลี่ยนแปลงรายวัน
-    df['diff_1'] = df[value_column].diff()
+    # ----- แทนที่การสร้าง lag_ เป็นการสร้าง Smooth Feature -----
+    # เช่น ใช้ Moving Average 7 วัน และ 14 วัน แบบง่าย
+    df['smooth_7'] = df[value_column].rolling(window=7).mean()
+    df['smooth_14'] = df[value_column].rolling(window=14).mean()
 
-    # diff_7 = การเปลี่ยนแปลงจาก 7 วันก่อน
-    df['diff_7'] = df[value_column] - df[value_column].shift(7)
-
-    # ลบ NaN หลังจากสร้าง difference
+    # ลบ NaN หลังจากสร้าง Smooth (กรณีต้นข้อมูล)
     df.dropna(inplace=True)
 
     # อัปเดตคอลัมน์ตัวเลข
