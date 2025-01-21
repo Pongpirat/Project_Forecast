@@ -8,15 +8,16 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
 from data_processing import process_data
 
 def main():
-    # ---------- 1) กำหนด path ของไฟล์ CSV ----------
-    csv_file_path = os.path.join('currency', 'AUD.csv')  # ปรับชื่อไฟล์ตามจริง
+    # --------------------------------------------------------
+    # 1) เลือกไฟล์ CSV
+    # --------------------------------------------------------
+    csv_file_path = os.path.join('currency', 'AUD.csv')
 
-    # ---------- 2) โหลดไฟล์ CSV ----------
     try:
         df = pd.read_csv(csv_file_path, encoding='utf-8')
     except UnicodeDecodeError:
@@ -30,69 +31,116 @@ def main():
         print("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
         return
 
-    # ---------- 3) ประมวลผลข้อมูล ----------
-    value_column = 'อัตราขาย'  # คอลัมน์เป้าหมาย
-    df_processed, numeric_cols = process_data(df, value_column)
+    # --------------------------------------------------------
+    # 2) ประมวลผลข้อมูล (reindex, forward fill, smooth=3)
+    # --------------------------------------------------------
+    value_column = 'อัตราขาย'
+    # ล็อก smoothing_window = 3
+    df_processed, numeric_cols = process_data(df, value_column, smoothing_window=3)
 
-    if value_column not in numeric_cols:
-        print(f"ไม่พบคอลัมน์ '{value_column}' ในข้อมูลที่ผ่านการประมวลผล")
-        return
+    # --------------------------------------------------------
+    # 3) สร้าง Lag features
+    # --------------------------------------------------------
+    df_processed['lag_1'] = df_processed['smoothed_value'].shift(1)
+    df_processed['lag_2'] = df_processed['smoothed_value'].shift(2)
+    df_processed.dropna(inplace=True)
 
-    # ---------- 4) สเกลข้อมูลทั้งหมด (รวม smooth_7, smooth_14) ----------
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df_processed[numeric_cols])
-    scaled_df = pd.DataFrame(scaled_data, index=df_processed.index, columns=numeric_cols)
+    # --------------------------------------------------------
+    # 4) แยกฟีเจอร์เป็น 2 กลุ่ม: date_features, target_features
+    # --------------------------------------------------------
+    date_features = ['day', 'month', 'year', 'week']
+    target_features = ['smoothed_value', 'lag_1', 'lag_2']
 
-    # ---------- 5) บันทึก Scaler สำหรับ Inference ----------
-    scaler_path = 'models/scaler_lstm.pkl'
-    joblib.dump(scaler, scaler_path)
-    print(f"Scaler ถูกบันทึกที่ {scaler_path}")
-
-    # ---------- 6) กำหนดพารามิเตอร์ ----------
-    window_size = 30
     days_to_remove = 30
+    df_train = df_processed.iloc[:-days_to_remove]
+    df_test = df_processed.iloc[-days_to_remove:]
 
-    # ---------- 7) แยก Train/Test ----------
-    train_scaled = scaled_df.iloc[:-days_to_remove]
-    test_scaled = scaled_df.iloc[-days_to_remove:]
+    # --------------------------------------------------------
+    # 5) สร้าง Scaler 2 ตัว และ fit แยก
+    # --------------------------------------------------------
+    scaler_date = MinMaxScaler()
+    scaler_target = MinMaxScaler()
 
-    # ---------- 8) สร้าง Sequence สำหรับ Train ----------
+    # fit เฉพาะช่วง train
+    train_date_scaled = scaler_date.fit_transform(df_train[date_features])
+    train_target_scaled = scaler_target.fit_transform(df_train[target_features])
+
+    # รวม date + target เป็น train_scaled
+    train_scaled = np.hstack([train_date_scaled, train_target_scaled])
+
+    # สร้าง DataFrame ไว้ดูสะดวก (ไม่บังคับ)
+    all_features = date_features + target_features
+    train_scaled_df = pd.DataFrame(train_scaled, index=df_train.index, columns=all_features)
+
+    # เซฟ scaler
+    os.makedirs('models', exist_ok=True)
+    scaler_date_path = 'models/scaler_lstm_date.pkl'
+    scaler_target_path = 'models/scaler_lstm_target.pkl'
+    joblib.dump(scaler_date, scaler_date_path)
+    joblib.dump(scaler_target, scaler_target_path)
+    print(f"Scaler สำหรับ Date Features บันทึกที่ {scaler_date_path}")
+    print(f"Scaler สำหรับ Target Features บันทึกที่ {scaler_target_path}")
+
+    # --------------------------------------------------------
+    # 6) สร้าง Sequence สำหรับ Train
+    #    window_size = 14
+    # --------------------------------------------------------
+    window_size = 14
     X_train, y_train = [], []
-    for i in range(window_size, len(train_scaled)):
-        # ดึงฟีเจอร์ทั้งหมด (รวม smooth_x)
-        X_train.append(train_scaled.iloc[i-window_size:i].values)
-        # เลือก Target จากคอลัมน์หลัก (value_column)
-        y_train.append(train_scaled.iloc[i][value_column])
+    train_values = train_scaled_df.values  # shape = (len(df_train), 7)
+
+    idx_smoothed = len(date_features)  # ตำแหน่ง smoothed_value
+
+    for i in range(window_size, len(train_values)):
+        # X: 14 แถวก่อนหน้า
+        X_train.append(train_values[i - window_size:i, :])
+        # y: ค่า smoothed_value แถว i
+        y_train.append(train_values[i, idx_smoothed])
 
     X_train = np.array(X_train)
     y_train = np.array(y_train)
 
-    # ---------- 9) แบ่ง Train/Validation (80:20) ----------
+    # --------------------------------------------------------
+    # 7) แบ่ง Train/Validation
+    # --------------------------------------------------------
     train_size = int(len(X_train) * 0.8)
     X_val = X_train[train_size:]
     y_val = y_train[train_size:]
     X_train2 = X_train[:train_size]
     y_train2 = y_train[:train_size]
 
-    # ---------- 10) สร้างโมเดล LSTM ----------
+    # --------------------------------------------------------
+    # 8) สร้างโมเดล LSTM
+    # --------------------------------------------------------
     model = Sequential([
-        Bidirectional(LSTM(128, return_sequences=True), input_shape=(window_size, X_train.shape[2])),
+        Bidirectional(LSTM(256, return_sequences=True, activation='relu'), 
+                      input_shape=(window_size, train_values.shape[1])),
         Dropout(0.3),
-        LSTM(64, return_sequences=False),
+        LSTM(128, return_sequences=True, activation='relu'),
+        Dropout(0.3),
+        LSTM(64, return_sequences=False, activation='relu'),
         Dropout(0.3),
         Dense(1)
     ])
 
-    optimizer = Adam(learning_rate=1e-5)
+    optimizer = Adam(learning_rate=1e-3)
     model.compile(optimizer=optimizer, loss='mean_squared_error')
 
     early_stop = EarlyStopping(
         monitor='val_loss',
         patience=15,
-        restore_best_weights=True
+        restore_best_weights=True,
+        verbose=1
+    )
+    reduce_lr = ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=5,
+        min_lr=1e-6,
+        verbose=1
     )
 
-    epochs = 300
+    epochs = 500
     batch_size = 32
 
     print("กำลังฝึกโมเดล LSTM...")
@@ -101,88 +149,90 @@ def main():
         validation_data=(X_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
-        callbacks=[early_stop],
+        callbacks=[early_stop, reduce_lr],
         verbose=1
     )
-    print("การฝึกโมเดลเสร็จสิ้นแล้ว")
+    print("ฝึกโมเดลเสร็จสิ้น")
 
-    # ---------- แสดงกราฟ Loss ----------
+    # --------------------------------------------------------
+    # 9) บันทึกโมเดล + Plot Loss
+    # --------------------------------------------------------
+    model_path = 'models/lstm_model.h5'
+    model.save(model_path)
+    print(f"โมเดลบันทึกที่ {model_path}")
+
     plt.figure(figsize=(10, 6))
     plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.plot(history.history['val_loss'], label='Val Loss')
     plt.title('Model Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
     plt.savefig('models/loss_plot.png')
     plt.close()
-    print("Loss plot ถูกบันทึกที่ models/loss_plot.png")
 
-    # ---------- 11) บันทึกโมเดล ----------
-    model_path = 'models/lstm_model.h5'
-    model.save(model_path)
-    print(f"โมเดลถูกบันทึกที่ {model_path}")
+    # --------------------------------------------------------
+    # 10) ประเมินบน Test Set
+    # --------------------------------------------------------
+    test_date_scaled = scaler_date.transform(df_test[date_features])
+    test_target_scaled = scaler_target.transform(df_test[target_features])
+    test_scaled = np.hstack([test_date_scaled, test_target_scaled])
 
-    # ---------- 12) ประเมินโมเดลบน Test Set (Simple) ----------
-    # ตัวอย่างง่าย ๆ ในที่นี้ จะสร้าง Sequence จาก train_scaled ชุดสุดท้าย
-    # แล้วทำนายแบบ walk-forward หรือ จะทำนายครั้งเดียวก็ได้
+    test_scaled_df = pd.DataFrame(test_scaled, index=df_test.index, columns=all_features)
 
-    # สร้าง Sequence สุดท้ายสำหรับทำนาย
     X_test, y_test = [], []
-    for i in range(window_size, len(scaled_df)):
-        X_test.append(scaled_df.iloc[i-window_size:i].values)
-        y_test.append(scaled_df.iloc[i][value_column])
+    test_values = test_scaled_df.values
+    for i in range(window_size, len(test_values)):
+        X_test.append(test_values[i - window_size:i, :])
+        y_test.append(test_values[i, idx_smoothed])
+
     X_test = np.array(X_test)
     y_test = np.array(y_test)
 
-    # สร้าง test_set เฉพาะส่วน days_to_remove
-    X_test_set = X_test[-days_to_remove:]
-    y_test_set = y_test[-days_to_remove:]
-    dates_test_set = df_processed.index[-days_to_remove:]
+    test_dates = test_scaled_df.index[window_size:]
+    predictions_scaled = model.predict(X_test).ravel()
 
-    # ทำนาย
-    predictions_scaled = model.predict(X_test_set)
-    predictions_scaled = predictions_scaled.ravel()
+    # สร้าง array เต็มเพื่อ inverse
+    predictions_full = np.zeros((len(predictions_scaled), len(all_features)))
+    predictions_full[:, idx_smoothed] = predictions_scaled
 
-    # inverse transform เฉพาะคอลัมน์เป้าหมาย
-    predictions_full = np.zeros((days_to_remove, len(numeric_cols)))
-    predictions_full[:, numeric_cols.get_loc(value_column)] = predictions_scaled
+    y_test_full = np.zeros((len(y_test), len(all_features)))
+    y_test_full[:, idx_smoothed] = y_test
 
-    y_test_full = np.zeros((days_to_remove, len(numeric_cols)))
-    y_test_full[:, numeric_cols.get_loc(value_column)] = y_test_set
+    pred_target_part = predictions_full[:, len(date_features):]  # [smoothed_value, lag_1, lag_2]
+    actual_target_part = y_test_full[:, len(date_features):]
 
-    predictions_inversed = scaler.inverse_transform(predictions_full)[:, numeric_cols.get_loc(value_column)]
-    actual_inversed = scaler.inverse_transform(y_test_full)[:, numeric_cols.get_loc(value_column)]
+    pred_inv = scaler_target.inverse_transform(pred_target_part)[:, 0]
+    actual_inv = scaler_target.inverse_transform(actual_target_part)[:, 0]
 
-    # ---------- 13) สร้าง DataFrame เปรียบเทียบ ----------
     comparison = pd.DataFrame({
-        'Actual': actual_inversed,
-        'Predicted': predictions_inversed
-    }, index=dates_test_set)
+        'Actual': actual_inv,
+        'Predicted': pred_inv
+    }, index=test_dates)
 
-    mae = np.mean(np.abs(actual_inversed - predictions_inversed))
-    rmse = np.sqrt(np.mean((actual_inversed - predictions_inversed)**2))
-    mape = np.mean(np.abs((actual_inversed - predictions_inversed)/actual_inversed))*100
+    mae = np.mean(np.abs(comparison['Actual'] - comparison['Predicted']))
+    rmse = np.sqrt(np.mean((comparison['Actual'] - comparison['Predicted'])**2))
+    mape = np.mean(np.abs((comparison['Actual'] - comparison['Predicted']) / comparison['Actual'])) * 100
 
-    print("ผลการประเมินโมเดลบน Test Set:")
-    print(f"MAE: {mae:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-    print(f"MAPE: {mape:.2f}%")
+    print("ผลการประเมิน (Test Set):")
+    print(f"MAE = {mae:.4f}")
+    print(f"RMSE = {rmse:.4f}")
+    print(f"MAPE = {mape:.2f}%")
 
     comparison_path = 'models/lstm_comparison.csv'
     comparison.to_csv(comparison_path)
-    print(f"Comparison ถูกบันทึกที่ {comparison_path}")
+    print(f"Comparison บันทึกที่ {comparison_path}")
 
+    # วาดกราฟ
     plt.figure(figsize=(10, 6))
     plt.plot(comparison['Actual'], label='Actual')
     plt.plot(comparison['Predicted'], label='Predicted')
-    plt.title('Actual vs Predicted')
+    plt.title('Actual vs Predicted (Smoothed Trend) - Test Set')
     plt.xlabel('Date')
     plt.ylabel(value_column)
     plt.legend()
     plt.savefig('models/actual_vs_predicted.png')
     plt.close()
-    print("Actual vs Predicted plot ถูกบันทึกที่ models/actual_vs_predicted.png")
 
 if __name__ == "__main__":
     main()

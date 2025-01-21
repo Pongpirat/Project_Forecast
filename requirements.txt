@@ -7,3 +7,4 @@ plotly
 statsmodels
 scikit-learn
 pmdarima
+tensorflow

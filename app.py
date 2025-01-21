@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.graph_objects as go
+from datetime import datetime
 
 from data_processing import process_data
 from models.exponential_smoothing import exponential_smoothing_model
@@ -14,10 +15,11 @@ def main():
     st.title("Dashboard เปรียบเทียบการพยากรณ์จากทุกโมเดลในหน้าเดียว")
     st.markdown("---")
 
-    # ---------- Sidebar: เลือกไฟล์ CSV & กำหนด Days to Remove ----------
+    # ส่วน Sidebar สำหรับรับค่าพารามิเตอร์ต่าง ๆ
     with st.sidebar:
         st.header("การตั้งค่า")
 
+        # เลือกไฟล์ CSV จากโฟลเดอร์ 'currency'
         preloaded_files_dir = os.path.join(os.getcwd(), 'currency')
         if not os.path.exists(preloaded_files_dir):
             st.error(f"ไม่พบโฟลเดอร์ '{preloaded_files_dir}'")
@@ -30,9 +32,14 @@ def main():
 
         selected_preloaded_file = st.selectbox("เลือกไฟล์ CSV", preloaded_files)
         preloaded_file_path = os.path.join(preloaded_files_dir, selected_preloaded_file)
-        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกทดสอบ", min_value=1, value=30)
 
-    # ---------- โหลดและตรวจสอบไฟล์ CSV ----------
+        # ระบุจำนวนวันที่ถือเป็น Test Set
+        days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกทดสอบ (Test Set)", min_value=1, value=30)
+
+        # เพิ่มตัวเลือกสำหรับจำนวนวันที่ต้องการพยากรณ์อนาคต
+        forecast_days = st.number_input("ระบุจำนวนวันที่ต้องการพยากรณ์อนาคต", min_value=1, value=60)
+
+    # โหลดไฟล์ CSV
     try:
         df = pd.read_csv(preloaded_file_path, encoding='utf-8')
     except UnicodeDecodeError:
@@ -46,24 +53,26 @@ def main():
         st.error("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
         st.stop()
 
-    # ---------- ประมวลผลข้อมูล (Process Data) ----------
+    value_column = 'อัตราขาย'  # คอลัมน์หลักที่สนใจ
+
+    # ประมวลผลข้อมูล (forward fill, reindex, smoothing) -- ล็อก smoothing_window=3
     with st.spinner('กำลังประมวลผลข้อมูล...'):
-        # กำหนดค่า value_column ตามที่ใช้ในการฝึกโมเดล
-        value_column = 'อัตราขาย'  # ปรับตามคอลัมน์ที่คุณใช้พยากรณ์
         try:
-            processed_df, numeric_cols = process_data(df, value_column)
+            processed_df, numeric_cols = process_data(
+                df,
+                value_column=value_column,
+                smoothing_window=3  # ล็อก smoothing เป็น 3
+            )
         except ValueError as ve:
             st.error(str(ve))
             st.stop()
 
-    # ---------- เลือกคอลัมน์ที่ต้องการพยากรณ์ ----------
-    # value_column ถูกกำหนดไว้แล้วที่ด้านบน ไม่จำเป็นต้องเลือกอีกครั้ง
-    # หากคุณต้องการให้ผู้ใช้สามารถเลือกได้ คุณสามารถเพิ่มได้ตามเดิม
-
-    # ---------- สร้าง Dictionary เก็บผลลัพธ์ของแต่ละโมเดล ----------
+    # สร้าง dict เก็บผลลัพธ์จากแต่ละโมเดล
     results = {}
-    
-    # ---------- 1) Exponential Smoothing ----------
+
+    # ----------------------
+    # (1) Exponential Smoothing
+    # ----------------------
     with st.spinner("กำลังรันโมเดล Exponential Smoothing..."):
         try:
             exp_result = exponential_smoothing_model(
@@ -75,21 +84,25 @@ def main():
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดใน Exponential Smoothing: {e}")
 
-    # ---------- 2) Moving Average (EMA) ----------
+    # ----------------------
+    # (2) Moving Average (EMA)
+    # ----------------------
     with st.spinner("กำลังรันโมเดล Moving Average..."):
         try:
             ma_result = moving_average_model(
                 data=processed_df,
                 value_column=value_column,
                 days_to_remove=int(days_to_remove),
-                window_size=30,  # สามารถปรับได้
+                window_size=30,
                 use_ema=True
             )
             results['Moving Average (EMA)'] = ma_result
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดใน Moving Average: {e}")
 
-    # ---------- 3) SARIMA ----------
+    # ----------------------
+    # (3) SARIMA
+    # ----------------------
     with st.spinner("กำลังรันโมเดล SARIMA..."):
         try:
             sarima_result = sarima_model(
@@ -103,142 +116,140 @@ def main():
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดใน SARIMA: {e}")
 
-    # ---------- 4) LSTM ----------
+    # ----------------------
+    # (4) LSTM
+    # ----------------------
     with st.spinner("กำลังรันโมเดล LSTM..."):
-        # กำหนด path ของไฟล์โมเดลและ scaler
         model_path = os.path.join('models', 'lstm_model.h5')
-        scaler_path = os.path.join('models', 'scaler_lstm.pkl')
+        scaler_date_path = os.path.join('models', 'scaler_lstm_date.pkl')
+        scaler_target_path = os.path.join('models', 'scaler_lstm_target.pkl')
 
-        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+        if (not os.path.exists(model_path) or
+            not os.path.exists(scaler_date_path) or
+            not os.path.exists(scaler_target_path)):
             st.warning("ไม่พบไฟล์โมเดล LSTM หรือ Scaler. กรุณาฝึกโมเดล LSTM ให้เรียบร้อยก่อน.")
         else:
             try:
                 lstm_result = inference_lstm_model(
                     data=processed_df,
-                    value_column=value_column,
+                    value_column='smoothed_value',
                     days_to_remove=int(days_to_remove),
                     model_path=model_path,
-                    scaler_path=scaler_path,
-                    window_size=30  # ต้องตรงกับขณะที่เทรน (window_size=60)
+                    scaler_date_path=scaler_date_path,
+                    scaler_target_path=scaler_target_path,
+                    window_size=14,
+                    forecast_days=int(forecast_days)  # ใช้ค่าจากผู้ใช้
                 )
                 results['LSTM'] = lstm_result
             except Exception as e:
                 st.error(f"เกิดข้อผิดพลาดใน LSTM: {e}")
 
-    # ---------- ตรวจสอบว่ามีโมเดลใดบ้างที่รันสำเร็จ ----------
     if not results:
         st.error("ไม่พบผลลัพธ์จากโมเดลใดเลย")
         st.stop()
 
-    # ---------- สร้างกราฟเปรียบเทียบ ----------
-    st.subheader("เปรียบเทียบ Actual vs Predicted ของทุกโมเดล")
+    # ------------------------------------------------
+    # เปรียบเทียบ Actual vs Predicted ของทุกโมเดล (เฉพาะปี 2024) และตาราง Metrics อยู่แนวเดียวกัน
+    # ------------------------------------------------    
+    # สร้างสองคอลัมน์สำหรับจัดวางกราฟและตาราง Metrics ไว้ข้างกัน
+    col1, col2 = st.columns([2, 1])  # กำหนดสัดส่วนความกว้าง เช่น 2:1
 
-    fig = go.Figure()
+    with col1:
+        fig = go.Figure()
 
-    # 1) Plot เส้น Actual เต็มช่วง
-    actual_series = processed_df[value_column]
-    fig.add_trace(go.Scatter(
-        x=actual_series.index,
-        y=actual_series,
-        mode='lines',
-        name='Actual',
-        line=dict(color='black')
-    ))
-
-    # 2) Plot เส้น Predicted ของแต่ละโมเดล
-    for model_name, result_data in results.items():
-        comp_df = result_data['comparison']
+        # Actual (Smoothed) สำหรับปี 2024
+        actual_series = processed_df['smoothed_value']
+        actual_2024 = actual_series[actual_series.index.year == 2024]
         fig.add_trace(go.Scatter(
-            x=comp_df.index,
-            y=comp_df['Predicted'],
+            x=actual_2024.index,
+            y=actual_2024,
             mode='lines',
-            name=f'Predicted ({model_name})'
+            name='Actual (Smoothed)',
+            line=dict(color='black')
         ))
 
-    fig.update_layout(
-        title='Actual vs Predicted (All Models)',
-        xaxis_title='Date',
-        yaxis_title=value_column,
-        legend=dict(x=0, y=1),
-        hovermode='x unified'
-    )
+        # เพิ่ม Prediction ของแต่ละโมเดล (เฉพาะปี 2024)
+        for model_name, result_data in results.items():
+            comp_df = result_data['comparison']
+            # เลือกเฉพาะปี 2024
+            comp_2024 = comp_df[comp_df.index.year == 2024]
+            fig.add_trace(go.Scatter(
+                x=comp_2024.index,
+                y=comp_2024['Predicted'],
+                mode='lines',
+                name=f'Predicted ({model_name})'
+            ))
 
-    st.plotly_chart(fig, use_container_width=True)
+            # ถ้ามีการพยากรณ์อนาคต ให้แสดงในกราฟด้วย (เฉพาะปี 2024 ถ้ามี)
+            if 'future_predictions' in result_data:
+                future_df = result_data['future_predictions']
+                # เลือกเฉพาะปี 2024
+                future_2024 = future_df[future_df.index.year == 2024]
+                fig.add_trace(go.Scatter(
+                    x=future_2024.index,
+                    y=future_2024['Predicted'],
+                    mode='lines',
+                    name=f'Forecast ({model_name})',
+                    line=dict(dash='dash')
+                ))
 
-    # ---------- สร้างตาราง Metrics เปรียบเทียบ ----------
-    st.subheader("ตารางเปรียบเทียบ Metrics (MAE, RMSE, MAPE)")
-    metrics_data = []
-    for model_name, result_data in results.items():
-        row = {
-            'Model': model_name,
-            'MAE': result_data['mae'],
-            'RMSE': result_data['rmse'],
-            'MAPE': result_data['mape']
-        }
-        metrics_data.append(row)
+        fig.update_layout(
+            title='Actual vs Predicted (All Models) - ปี 2024',
+            xaxis_title='Date',
+            yaxis_title='อัตราขาย (Smoothed)',
+            legend=dict(x=0, y=1),
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    metrics_df = pd.DataFrame(metrics_data)
-    st.dataframe(metrics_df, use_container_width=True)
+    with col2:
+        st.markdown("### Metrics (MAE, RMSE, MAPE)")
+        
+        metrics_data = []
+        for model_name, result_data in results.items():
+            row = {
+                'Model': model_name,
+                'MAE': round(result_data['mae'], 4),
+                'RMSE': round(result_data['rmse'], 4),
+                'MAPE': f"{round(result_data['mape'], 2)}%"
+            }
+            metrics_data.append(row)
 
-    # -----------------------------------------------------------------------------
-    #    สร้าง "ตารางเดียว" ที่รวม Actual + Predicted จากทุกโมเดลเอาไว้ด้วยกัน
-    # -----------------------------------------------------------------------------
-    st.subheader("ตารางเปรียบเทียบ Actual vs Predicted (เฉพาะช่วงที่มีข้อมูล)")
+        metrics_df = pd.DataFrame(metrics_data)
 
-    # เริ่มด้วยการสร้าง DataFrame เปล่าๆ (หรือจะตั้งต้นด้วย processed_df เลยก็ได้)
+        # แสดงตาราง Metrics แบบปกติ
+        st.dataframe(metrics_df, use_container_width=True)
+
+    # ------------------------------------------------
+    # ตารางเปรียบเทียบ Actual vs Predicted (ช่วงที่มีข้อมูล)
+    # ------------------------------------------------
+    st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
+
     combined_df = pd.DataFrame(index=processed_df.index)
-    combined_df['Actual'] = processed_df[value_column]
+    combined_df['Actual (Smoothed)'] = processed_df['smoothed_value']
 
-    # เติม Predicted ของแต่ละโมเดลเป็นคอลัมน์ใหม่
     for model_name, result_data in results.items():
-        # 'comparison' คือ DataFrame ที่แต่ละโมเดลส่งกลับมา
-        # มีคอลัมน์ 'Actual' กับ 'Predicted' (index ของแต่ละโมเดลต้องตรงกัน)
         comp_df = result_data['comparison']
-
-        # เปลี่ยนชื่อ (rename) คอลัมน์ Predicted เพื่อแยกความแตกต่างของแต่ละโมเดล
         predicted_col_name = f'Predicted_{model_name}'
-
-        # join กับ combined_df โดยใช้ index ที่เหมือนกัน
         combined_df = combined_df.join(
             comp_df['Predicted'].rename(predicted_col_name),
             how='left'
         )
 
-    # กรองเฉพาะแถวที่ไม่มี NaN ในคอลัมน์ 'Actual' และ 'Predicted_*' ทุกคอลัมน์
-    non_nan_columns = ['Actual'] + [f'Predicted_{model}' for model in results.keys()]
+    non_nan_columns = ['Actual (Smoothed)'] + [f'Predicted_{model}' for model in results.keys()]
     filtered_combined_df = combined_df.dropna(subset=non_nan_columns)
 
-    # แสดง DataFrame ที่ผ่านการกรอง
     st.dataframe(filtered_combined_df, use_container_width=True)
 
-    # ---------- สร้างกราฟ Actual vs Predicted แยกตามโมเดล ----------
-    st.subheader("Actual vs Predicted แยกตามโมเดล")
+    # ------------------------------------------------
+    # แสดงผลการพยากรณ์อนาคต (ถ้ามี) - **ลบออกแล้ว**
+    # ------------------------------------------------
+    # ข้อนี้ถูกลบออกแล้ว ไม่แสดงพยากรณ์อนาคตจาก LSTM
 
-    for model_name, result_data in results.items():
-        comp_df = result_data['comparison']
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=comp_df.index,
-            y=comp_df['Actual'],
-            mode='lines',
-            name='Actual',
-            line=dict(color='black')
-        ))
-        fig.add_trace(go.Scatter(
-            x=comp_df.index,
-            y=comp_df['Predicted'],
-            mode='lines',
-            name='Predicted',
-            line=dict(color='blue')
-        ))
-        fig.update_layout(
-            title=f'Actual vs Predicted ({model_name})',
-            xaxis_title='Date',
-            yaxis_title=value_column,
-            legend=dict(x=0, y=1),
-            hovermode='x unified'
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # ------------------------------------------------
+    # ลบกราฟ "Actual vs Predicted แยกตามโมเดล" ทั้งหมด
+    # ------------------------------------------------
+    # ข้อนี้ถูกลบออกแล้ว ไม่แสดงกราฟแยกตามโมเดล
 
 if __name__ == "__main__":
     main()

@@ -1,51 +1,47 @@
 import pandas as pd
 from utils.date_converter import convert_thai_date_to_datetime
 
-def process_data(df, value_column):
+def process_data(df, value_column, smoothing_window=3):
+    """
+    ประมวลผลข้อมูล:
+    - แปลงวันที่ (ไทย -> สากล)
+    - เติมวันที่ที่ขาด (reindex daily) จากปี 2014-01-01 จนถึงวันสุดท้าย
+    - forward fill เพื่อเลี่ยง data leakage
+    - ทำ rolling average (window=smoothing_window) -> smoothed_value
+    - ปัดเศษตัวเลข
+    - เพิ่มคอลัมน์ day, month, year, week
+    """
     try:
-        # แปลงวันที่
         df['งวด'] = df['งวด'].apply(convert_thai_date_to_datetime)
     except ValueError as e:
         print(f"Error converting date: {e}")
         raise e
 
-    # ลบแถวที่ไม่สามารถแปลงวันที่ได้
     df.dropna(subset=['งวด'], inplace=True)
-
-    # ตั้ง "งวด" เป็น index
     df.set_index('งวด', inplace=True)
+    df.sort_index(inplace=True)
 
-    # ตรวจสอบคอลัมน์ที่เป็นตัวเลข
     numeric_columns = df.select_dtypes(include=['float', 'int']).columns
     if value_column not in numeric_columns:
         raise ValueError(f"ไม่พบคอลัมน์ '{value_column}' ในข้อมูลที่ผ่านการประมวลผล")
 
-    # สร้างช่วงวันที่ใหม่
-    start_date = pd.to_datetime('2014-01-01')
+    start_date = max(pd.to_datetime('2014-01-01'), df.index.min())
     end_date = df.index.max()
     full_date_range = pd.date_range(start=start_date, end=end_date, freq='D')
 
-    # เติมวันที่ขาด
     df = df.reindex(full_date_range)
     df.index.name = 'งวด'
-
-    # forward-fill และ back-fill
     df.fillna(method='ffill', inplace=True)
-    df.fillna(method='bfill', inplace=True)
 
-    # ปัดเศษตัวเลข
-    decimal_places = 4
-    df[numeric_columns] = df[numeric_columns].round(decimal_places)
+    df[numeric_columns] = df[numeric_columns].round(4)
+    df['smoothed_value'] = df[value_column].rolling(window=smoothing_window, min_periods=1).mean()
+    df.dropna(subset=['smoothed_value'], inplace=True)
 
-    # ----- แทนที่การสร้าง lag_ เป็นการสร้าง Smooth Feature -----
-    # เช่น ใช้ Moving Average 7 วัน และ 14 วัน แบบง่าย
-    df['smooth_7'] = df[value_column].rolling(window=7).mean()
-    df['smooth_14'] = df[value_column].rolling(window=14).mean()
+    df['day'] = df.index.day
+    df['month'] = df.index.month
+    df['year'] = df.index.year
+    df['week'] = df.index.isocalendar().week
 
-    # ลบ NaN หลังจากสร้าง Smooth (กรณีต้นข้อมูล)
-    df.dropna(inplace=True)
-
-    # อัปเดตคอลัมน์ตัวเลข
-    numeric_columns = df.select_dtypes(include=['float', 'int']).columns
+    numeric_columns = df.select_dtypes(include=['float', 'int', 'uint32']).columns
 
     return df, numeric_columns
