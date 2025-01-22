@@ -37,8 +37,10 @@ def main():
         # ระบุจำนวนวันที่ถือเป็น Test Set
         days_to_remove = st.number_input("ระบุจำนวนวันที่ต้องการแยกทดสอบ (Test Set)", min_value=1, value=30)
 
-        # เพิ่มตัวเลือกสำหรับจำนวนวันที่ต้องการพยากรณ์อนาคต
-        forecast_days = st.number_input("ระบุจำนวนวันที่ต้องการพยากรณ์อนาคต", min_value=1, value=60)
+        # ปิดการใช้งานการพยากรณ์อนาคตข้าง 60 วัน
+        # หากต้องการเปิดใช้งานในภายหลัง ให้ทำการ uncomment โค้ดด้านล่างและตั้งค่า forecast_days ตามต้องการ
+        # forecast_days = st.number_input("ระบุจำนวนวันที่ต้องการพยากรณ์อนาคต", min_value=1, value=60)
+        forecast_days = 0  # ตั้งค่าเป็น 0 เพื่อปิดการพยากรณ์อนาคต
 
         st.markdown("---")
 
@@ -155,7 +157,7 @@ def main():
                     scaler_date_path=scaler_date_path,
                     scaler_target_path=scaler_target_path,
                     window_size=14,
-                    forecast_days=int(forecast_days)  # ใช้ค่าจากผู้ใช้
+                    forecast_days=int(forecast_days)  # ใช้ค่า 0 เพื่อปิดการพยากรณ์อนาคต
                 )
                 results['LSTM'] = lstm_result
             except Exception as e:
@@ -195,16 +197,18 @@ def main():
                 name=f'Predicted ({model_name})'
             ))
 
-            if 'future_predictions' in result_data:
-                future_df = result_data['future_predictions']
-                future_2024 = future_df[future_df.index.year == 2024]
-                fig.add_trace(go.Scatter(
-                    x=future_2024.index,
-                    y=future_2024['Predicted'],
-                    mode='lines',
-                    name=f'Forecast ({model_name})',
-                    line=dict(dash='dash')
-                ))
+            # ไม่แสดง future_predictions เนื่องจาก forecast_days=0
+            # หากเปิดใช้งานในภายหลัง สามารถ uncomment โค้ดด้านล่างได้
+            # if 'future_predictions' in result_data:
+            #     future_df = result_data['future_predictions']
+            #     future_2024 = future_df[future_df.index.year == 2024]
+            #     fig.add_trace(go.Scatter(
+            #         x=future_2024.index,
+            #         y=future_2024['Predicted'],
+            #         mode='lines',
+            #         name=f'Forecast ({model_name})',
+            #         line=dict(dash='dash')
+            #     ))
 
         fig.update_layout(
             title='Actual vs Predicted (All Models) - ปี 2024',
