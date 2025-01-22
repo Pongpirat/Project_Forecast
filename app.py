@@ -53,15 +53,18 @@ def main():
         st.error("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
         st.stop()
 
-    value_column = 'อัตราขาย'  # คอลัมน์หลักที่สนใจ
+    # กำหนดค่า value_column ให้ตรงกับข้อมูลดิบ (ไม่ใช่ smoothed_value)
+    value_column = 'อัตราขาย'  
 
-    # ประมวลผลข้อมูล (forward fill, reindex, smoothing) -- ล็อก smoothing_window=3
+    # ประมวลผลข้อมูล (forward fill, reindex, smoothing) 
+    # หากไม่ต้องการให้ smooth สำหรับ LSTM สามารถล็อก smoothing_window=3 (ใช้สำหรับโมเดลอื่น) 
+    # โดยในส่วนของ LSTM เราจะใช้ column 'อัตราขาย' แทน 'smoothed_value'
     with st.spinner('กำลังประมวลผลข้อมูล...'):
         try:
             processed_df, numeric_cols = process_data(
                 df,
                 value_column=value_column,
-                smoothing_window=3  # ล็อก smoothing เป็น 3
+                smoothing_window=3  # ค่า smoothing สำหรับโมเดลอื่นๆ ยังคงใช้ได้
             )
         except ValueError as ve:
             st.error(str(ve))
@@ -130,9 +133,10 @@ def main():
             st.warning("ไม่พบไฟล์โมเดล LSTM หรือ Scaler. กรุณาฝึกโมเดล LSTM ให้เรียบร้อยก่อน.")
         else:
             try:
+                # ใน LSTM เวลาทำนาย เราใช้ค่า 'อัตราขาย' (raw) แทน smoothed_value
                 lstm_result = inference_lstm_model(
                     data=processed_df,
-                    value_column='smoothed_value',
+                    value_column=value_column,
                     days_to_remove=int(days_to_remove),
                     model_path=model_path,
                     scaler_date_path=scaler_date_path,
@@ -151,13 +155,12 @@ def main():
     # ------------------------------------------------
     # เปรียบเทียบ Actual vs Predicted ของทุกโมเดล (เฉพาะปี 2024) และตาราง Metrics อยู่แนวเดียวกัน
     # ------------------------------------------------    
-    # สร้างสองคอลัมน์สำหรับจัดวางกราฟและตาราง Metrics ไว้ข้างกัน
     col1, col2 = st.columns([2, 1])  # กำหนดสัดส่วนความกว้าง เช่น 2:1
 
     with col1:
         fig = go.Figure()
 
-        # Actual (Smoothed) สำหรับปี 2024
+        # Actual สำหรับปี 2024 (ยังใช้ smoothed_value สำหรับโมเดลอื่นๆ)
         actual_series = processed_df['smoothed_value']
         actual_2024 = actual_series[actual_series.index.year == 2024]
         fig.add_trace(go.Scatter(
@@ -171,7 +174,6 @@ def main():
         # เพิ่ม Prediction ของแต่ละโมเดล (เฉพาะปี 2024)
         for model_name, result_data in results.items():
             comp_df = result_data['comparison']
-            # เลือกเฉพาะปี 2024
             comp_2024 = comp_df[comp_df.index.year == 2024]
             fig.add_trace(go.Scatter(
                 x=comp_2024.index,
@@ -180,10 +182,8 @@ def main():
                 name=f'Predicted ({model_name})'
             ))
 
-            # ถ้ามีการพยากรณ์อนาคต ให้แสดงในกราฟด้วย (เฉพาะปี 2024 ถ้ามี)
             if 'future_predictions' in result_data:
                 future_df = result_data['future_predictions']
-                # เลือกเฉพาะปี 2024
                 future_2024 = future_df[future_df.index.year == 2024]
                 fig.add_trace(go.Scatter(
                     x=future_2024.index,
@@ -216,13 +216,8 @@ def main():
             metrics_data.append(row)
 
         metrics_df = pd.DataFrame(metrics_data)
-
-        # แสดงตาราง Metrics แบบปกติ
         st.dataframe(metrics_df, use_container_width=True)
 
-    # ------------------------------------------------
-    # ตารางเปรียบเทียบ Actual vs Predicted (ช่วงที่มีข้อมูล)
-    # ------------------------------------------------
     st.subheader("ตารางเปรียบเทียบ Actual vs Predicted")
 
     combined_df = pd.DataFrame(index=processed_df.index)
@@ -240,16 +235,6 @@ def main():
     filtered_combined_df = combined_df.dropna(subset=non_nan_columns)
 
     st.dataframe(filtered_combined_df, use_container_width=True)
-
-    # ------------------------------------------------
-    # แสดงผลการพยากรณ์อนาคต (ถ้ามี) - **ลบออกแล้ว**
-    # ------------------------------------------------
-    # ข้อนี้ถูกลบออกแล้ว ไม่แสดงพยากรณ์อนาคตจาก LSTM
-
-    # ------------------------------------------------
-    # ลบกราฟ "Actual vs Predicted แยกตามโมเดล" ทั้งหมด
-    # ------------------------------------------------
-    # ข้อนี้ถูกลบออกแล้ว ไม่แสดงกราฟแยกตามโมเดล
 
 if __name__ == "__main__":
     main()

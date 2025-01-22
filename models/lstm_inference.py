@@ -15,7 +15,7 @@ def inference_lstm_model(
 ):
     """
     Inference สำหรับโมเดล LSTM (รวม Recursive Forecast)
-    โดยใช้ 2 Scaler (date + target)
+    โดยใช้ 2 Scaler (date + target) และใช้ข้อมูลดิบ (อัตราขาย) แทนการใช้ smoothing
     """
     # สร้าง lag ถ้ายังไม่มี (ปกติใน data ควรมีแล้ว แต่กันพลาด)
     if 'lag_1' not in data.columns:
@@ -25,7 +25,7 @@ def inference_lstm_model(
     data.dropna(inplace=True)
 
     date_features = ['day', 'month', 'year', 'week']
-    target_features = ['smoothed_value', 'lag_1', 'lag_2']
+    target_features = [value_column, 'lag_1', 'lag_2']
 
     scaler_date = joblib.load(scaler_date_path)
     scaler_target = joblib.load(scaler_target_path)
@@ -54,18 +54,16 @@ def inference_lstm_model(
     last_train_target_scaled = scaler_target.transform(last_train[target_features])
     last_train_scaled = np.hstack([last_train_date_scaled, last_train_target_scaled])
 
-    # รวม last_train_scaled + test_scaled
     combined_scaled = np.vstack([last_train_scaled, test_scaled])
     combined_index = last_train.index.tolist() + test_scaled_df.index.tolist()
     combined_df = pd.DataFrame(combined_scaled, index=combined_index, columns=all_features)
 
-    # สร้าง X_test, y_test
     X, y = [], []
-    idx_smoothed = len(date_features)  # ตำแหน่ง smoothed_value
+    idx_target = len(date_features)  # ตำแหน่งของ value_column ใน target_features
 
     for i in range(window_size, len(combined_df)):
         X.append(combined_df.values[i - window_size:i, :])
-        y.append(combined_df.values[i, idx_smoothed])
+        y.append(combined_df.values[i, idx_target])
 
     X = np.array(X)
     y = np.array(y)
@@ -74,17 +72,15 @@ def inference_lstm_model(
     X_test = X[-days_to_remove:]
     y_test = y[-days_to_remove:]
 
-    # พยากรณ์
     preds_test_scaled = model.predict(X_test).ravel()
 
-    # สร้าง array เต็มเพื่อ inverse
     predictions_full = np.zeros((len(preds_test_scaled), len(all_features)))
-    predictions_full[:, idx_smoothed] = preds_test_scaled
+    predictions_full[:, idx_target] = preds_test_scaled
 
     y_test_full = np.zeros((len(y_test), len(all_features)))
-    y_test_full[:, idx_smoothed] = y_test
+    y_test_full[:, idx_target] = y_test
 
-    pred_target_part = predictions_full[:, len(date_features):]  # [smoothed_value, lag_1, lag_2]
+    pred_target_part = predictions_full[:, len(date_features):]  # [อัตราขาย, lag_1, lag_2]
     actual_target_part = y_test_full[:, len(date_features):]
 
     pred_inv = scaler_target.inverse_transform(pred_target_part)[:, 0]
@@ -95,7 +91,6 @@ def inference_lstm_model(
         'Predicted': pred_inv
     }, index=test_index)
 
-    # คำนวณ metrics
     mae = np.mean(np.abs(comparison['Actual'] - comparison['Predicted']))
     rmse = np.sqrt(np.mean((comparison['Actual'] - comparison['Predicted'])**2))
     mape = np.mean(np.abs((comparison['Actual'] - comparison['Predicted']) / comparison['Actual'])) * 100
@@ -111,8 +106,6 @@ def inference_lstm_model(
     # 2) Recursive Forecasting (forecast_days)
     # ------------------------------------------------
     if forecast_days > 0:
-        # เราจะสร้าง sequence สุดท้ายจาก "combined_df" ทั้งหมด (ที่รวม train+test แล้ว)
-        # เพื่อเริ่มพยากรณ์วันถัดไป
         df_forecast = data.copy()
         full_date_scaled = scaler_date.transform(df_forecast[date_features])
         full_target_scaled = scaler_target.transform(df_forecast[target_features])
@@ -121,11 +114,9 @@ def inference_lstm_model(
 
         last_sequence = full_scaled_df.iloc[-window_size:].copy()
 
-        # เตรียม index สำหรับอนาคต
         future_dates = pd.date_range(start=df_forecast.index[-1] + pd.Timedelta(days=1),
                                      periods=forecast_days, freq='D')
 
-        # สร้างฟีเจอร์ day, month, year, week สำหรับอนาคต
         future_features_date = pd.DataFrame(index=future_dates)
         future_features_date['day'] = future_features_date.index.day
         future_features_date['month'] = future_features_date.index.month
@@ -135,38 +126,30 @@ def inference_lstm_model(
         future_pred_list = []
 
         for i in range(forecast_days):
-            # 2.1) สร้าง date_scaled ของวัน i
             row_date_unscaled = future_features_date.iloc[i]  # day,month,year,week
             row_date_scaled = scaler_date.transform([row_date_unscaled.values])  # shape=(1,4)
 
-            # 2.2) เราต้อง predict โดยเอา last_sequence (14 แถว) => ใส่โมเดล => ได้ pred_scaled
             input_X = last_sequence.values.reshape(1, window_size, len(all_features))
-            pred_scaled_value = model.predict(input_X)[0][0]  # ค่าเดียว
+            pred_scaled_value = model.predict(input_X)[0][0]
 
-            # 2.3) อัปเดต lag
-            prev_lag_1_s = last_sequence.iloc[-1, idx_smoothed + 1]  # lag_1 ของแถวสุดท้าย
+            # อัปเดต lag:
+            prev_lag_1_s = last_sequence.iloc[-1, idx_target + 1]  # lag_1 ของแถวสุดท้าย
+            new_lag_1_s = pred_scaled_value
+            new_lag_2_s = prev_lag_1_s
 
-            new_lag_1_s = pred_scaled_value  # คือค่าพยากรณ์ (scaled) ของวันนี้ => ใช้เป็น lag_1 พรุ่งนี้
-            new_lag_2_s = prev_lag_1_s       # lag_1 ของแถวสุดท้าย => lag_2 ของแถวใหม่
-
-            # 2.4) รวม date_scaled + row_target_scaled
             row_target_scaled = np.array([[pred_scaled_value, new_lag_1_s, new_lag_2_s]], dtype=float)
             new_scaled_row = np.hstack([row_date_scaled, row_target_scaled])  # shape=(1,7)
 
-            # 2.5) ต่อ new_scaled_row เข้า last_sequence (แล้วลบแถวแรก)
             new_sequence = np.vstack([last_sequence.values[1:], new_scaled_row])
             last_sequence = pd.DataFrame(new_sequence, columns=all_features)
 
-            # 2.6) เก็บค่า pred ในโดเมนจริง (inverse transform)
-            # วิธี: สร้าง array (1,7) แล้วใส่ pred_scaled_value ในช่อง smoothed_value
             tmp_full = np.zeros((1, len(all_features)))
-            tmp_full[0, idx_smoothed] = pred_scaled_value
-            tmp_target_part = tmp_full[:, len(date_features):]  # [smoothed_value, lag_1, lag_2]
+            tmp_full[0, idx_target] = pred_scaled_value
+            tmp_target_part = tmp_full[:, len(date_features):]  # [อัตราขาย, lag_1, lag_2]
             pred_inv_value = scaler_target.inverse_transform(tmp_target_part)[0, 0]
 
             future_pred_list.append(pred_inv_value)
 
-        # สร้าง DataFrame เก็บผล
         future_comparison = pd.DataFrame({
             'Predicted': future_pred_list
         }, index=future_dates)

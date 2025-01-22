@@ -32,24 +32,26 @@ def main():
         return
 
     # --------------------------------------------------------
-    # 2) ประมวลผลข้อมูล (reindex, forward fill, smooth=3)
+    # 2) ประมวลผลข้อมูล (reindex, forward fill, smoothing)
     # --------------------------------------------------------
+    # สำหรับโมเดล LSTM เราจะใช้ข้อมูลดิบ โดยใช้คอลัมน์ 'อัตราขาย'
+    # แต่สำหรับโมเดลอื่นๆ อาจยังคงใช้ smoothing ได้
     value_column = 'อัตราขาย'
-    # ล็อก smoothing_window = 3
+    # หากต้องการให้โมเดลอื่นๆ ใช้ smoothing ให้ปล่อยไว้ หรือเปลี่ยนเป็น smoothing_window=1 ก็ได้
     df_processed, numeric_cols = process_data(df, value_column, smoothing_window=3)
 
     # --------------------------------------------------------
-    # 3) สร้าง Lag features
+    # 3) สร้าง Lag features จากข้อมูลดิบ (อัตราขาย)
     # --------------------------------------------------------
-    df_processed['lag_1'] = df_processed['smoothed_value'].shift(1)
-    df_processed['lag_2'] = df_processed['smoothed_value'].shift(2)
+    df_processed['lag_1'] = df_processed[value_column].shift(1)
+    df_processed['lag_2'] = df_processed[value_column].shift(2)
     df_processed.dropna(inplace=True)
 
     # --------------------------------------------------------
     # 4) แยกฟีเจอร์เป็น 2 กลุ่ม: date_features, target_features
     # --------------------------------------------------------
     date_features = ['day', 'month', 'year', 'week']
-    target_features = ['smoothed_value', 'lag_1', 'lag_2']
+    target_features = [value_column, 'lag_1', 'lag_2']
 
     days_to_remove = 30
     df_train = df_processed.iloc[:-days_to_remove]
@@ -68,7 +70,6 @@ def main():
     # รวม date + target เป็น train_scaled
     train_scaled = np.hstack([train_date_scaled, train_target_scaled])
 
-    # สร้าง DataFrame ไว้ดูสะดวก (ไม่บังคับ)
     all_features = date_features + target_features
     train_scaled_df = pd.DataFrame(train_scaled, index=df_train.index, columns=all_features)
 
@@ -89,13 +90,13 @@ def main():
     X_train, y_train = [], []
     train_values = train_scaled_df.values  # shape = (len(df_train), 7)
 
-    idx_smoothed = len(date_features)  # ตำแหน่ง smoothed_value
+    # ใน all_features ส่วน target เริ่มที่ index len(date_features)
+    idx_target = len(date_features)
 
     for i in range(window_size, len(train_values)):
-        # X: 14 แถวก่อนหน้า
         X_train.append(train_values[i - window_size:i, :])
-        # y: ค่า smoothed_value แถว i
-        y_train.append(train_values[i, idx_smoothed])
+        # ให้ y_train เป็นค่าจากคอลัมน์ อัตราขาย (raw value scaled)
+        y_train.append(train_values[i, idx_target])
 
     X_train = np.array(X_train)
     y_train = np.array(y_train)
@@ -184,7 +185,7 @@ def main():
     test_values = test_scaled_df.values
     for i in range(window_size, len(test_values)):
         X_test.append(test_values[i - window_size:i, :])
-        y_test.append(test_values[i, idx_smoothed])
+        y_test.append(test_values[i, idx_target])
 
     X_test = np.array(X_test)
     y_test = np.array(y_test)
@@ -194,12 +195,12 @@ def main():
 
     # สร้าง array เต็มเพื่อ inverse
     predictions_full = np.zeros((len(predictions_scaled), len(all_features)))
-    predictions_full[:, idx_smoothed] = predictions_scaled
+    predictions_full[:, idx_target] = predictions_scaled
 
     y_test_full = np.zeros((len(y_test), len(all_features)))
-    y_test_full[:, idx_smoothed] = y_test
+    y_test_full[:, idx_target] = y_test
 
-    pred_target_part = predictions_full[:, len(date_features):]  # [smoothed_value, lag_1, lag_2]
+    pred_target_part = predictions_full[:, len(date_features):]  # [อัตราขาย, lag_1, lag_2]
     actual_target_part = y_test_full[:, len(date_features):]
 
     pred_inv = scaler_target.inverse_transform(pred_target_part)[:, 0]
@@ -227,7 +228,7 @@ def main():
     plt.figure(figsize=(10, 6))
     plt.plot(comparison['Actual'], label='Actual')
     plt.plot(comparison['Predicted'], label='Predicted')
-    plt.title('Actual vs Predicted (Smoothed Trend) - Test Set')
+    plt.title('Actual vs Predicted (Raw Trend) - Test Set')
     plt.xlabel('Date')
     plt.ylabel(value_column)
     plt.legend()
