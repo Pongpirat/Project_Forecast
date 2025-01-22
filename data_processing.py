@@ -1,9 +1,6 @@
 import pandas as pd
 from utils.date_converter import convert_thai_date_to_datetime
 
-import pandas as pd
-from utils.date_converter import convert_thai_date_to_datetime
-
 def process_data(df, value_column, smoothing_window=3):
     """
     ประมวลผลข้อมูล:

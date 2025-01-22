@@ -12,32 +12,33 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
 from data_processing import process_data
 
-def main():
-    # --------------------------------------------------------
-    # 1) เลือกไฟล์ CSV
-    # --------------------------------------------------------
-    csv_file_path = os.path.join('currency', 'AUD.csv')
-
+def train_lstm_model(selected_preloaded_file):
+    """
+    ฝึกโมเดล LSTM สำหรับไฟล์ CSV ที่เลือกและบันทึกโมเดลและ Scaler ลงในโฟลเดอร์เฉพาะ
+    """
     try:
+        # --------------------------------------------------------
+        # 1) เลือกไฟล์ CSV
+        # --------------------------------------------------------
+        preloaded_files_dir = os.path.join(os.getcwd(), 'currency')
+        csv_file_path = os.path.join(preloaded_files_dir, selected_preloaded_file)
+
         df = pd.read_csv(csv_file_path, encoding='utf-8')
     except UnicodeDecodeError:
         try:
             df = pd.read_csv(csv_file_path, encoding='cp874')
         except Exception as e:
             print(f"ไม่สามารถอ่านไฟล์ได้: {e}")
-            return
+            return False
 
     if 'งวด' not in df.columns:
         print("ไม่พบคอลัมน์ 'งวด' ในไฟล์ CSV ที่เลือก")
-        return
+        return False
 
     # --------------------------------------------------------
     # 2) ประมวลผลข้อมูล (reindex, forward fill, smoothing)
     # --------------------------------------------------------
-    # สำหรับโมเดล LSTM เราจะใช้ข้อมูลดิบ โดยใช้คอลัมน์ 'อัตราขาย'
-    # แต่สำหรับโมเดลอื่นๆ อาจยังคงใช้ smoothing ได้
     value_column = 'อัตราขาย'
-    # หากต้องการให้โมเดลอื่นๆ ใช้ smoothing ให้ปล่อยไว้ หรือเปลี่ยนเป็น smoothing_window=1 ก็ได้
     df_processed, numeric_cols = process_data(df, value_column, smoothing_window=3)
 
     # --------------------------------------------------------
@@ -73,10 +74,15 @@ def main():
     all_features = date_features + target_features
     train_scaled_df = pd.DataFrame(train_scaled, index=df_train.index, columns=all_features)
 
+    # สร้างโฟลเดอร์สำหรับโมเดล
+    base_filename = os.path.splitext(selected_preloaded_file)[0]
+    model_folder = os.path.join('models', base_filename)
+    os.makedirs(model_folder, exist_ok=True)
+
+    scaler_date_path = os.path.join(model_folder, 'scaler_lstm_date.pkl')
+    scaler_target_path = os.path.join(model_folder, 'scaler_lstm_target.pkl')
+
     # เซฟ scaler
-    os.makedirs('models', exist_ok=True)
-    scaler_date_path = 'models/scaler_lstm_date.pkl'
-    scaler_target_path = 'models/scaler_lstm_target.pkl'
     joblib.dump(scaler_date, scaler_date_path)
     joblib.dump(scaler_target, scaler_target_path)
     print(f"Scaler สำหรับ Date Features บันทึกที่ {scaler_date_path}")
@@ -158,7 +164,7 @@ def main():
     # --------------------------------------------------------
     # 9) บันทึกโมเดล + Plot Loss
     # --------------------------------------------------------
-    model_path = 'models/lstm_model.h5'
+    model_path = os.path.join(model_folder, 'lstm_model.h5')
     model.save(model_path)
     print(f"โมเดลบันทึกที่ {model_path}")
 
@@ -169,8 +175,10 @@ def main():
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
-    plt.savefig('models/loss_plot.png')
+    loss_plot_path = os.path.join(model_folder, 'loss_plot.png')
+    plt.savefig(loss_plot_path)
     plt.close()
+    print(f"Plot Loss บันทึกที่ {loss_plot_path}")
 
     # --------------------------------------------------------
     # 10) ประเมินบน Test Set
@@ -181,21 +189,40 @@ def main():
 
     test_scaled_df = pd.DataFrame(test_scaled, index=df_test.index, columns=all_features)
 
-    X_test, y_test = [], []
-    test_values = test_scaled_df.values
-    for i in range(window_size, len(test_values)):
-        X_test.append(test_values[i - window_size:i, :])
-        y_test.append(test_values[i, idx_target])
+    df_before_test = df_processed.iloc[: -days_to_remove]
+    if len(df_before_test) < window_size:
+        print("ข้อมูลไม่พอสร้าง sequence")
+        return False
 
-    X_test = np.array(X_test)
-    y_test = np.array(y_test)
+    # สร้าง scaled สำหรับช่วงก่อน test (เอา window_size แถวสุดท้าย)
+    last_train = df_before_test.iloc[-window_size:]
+    last_train_date_scaled = scaler_date.transform(last_train[date_features])
+    last_train_target_scaled = scaler_target.transform(last_train[target_features])
+    last_train_scaled = np.hstack([last_train_date_scaled, last_train_target_scaled])
 
-    test_dates = test_scaled_df.index[window_size:]
-    predictions_scaled = model.predict(X_test).ravel()
+    combined_scaled = np.vstack([last_train_scaled, test_scaled])
+    combined_index = last_train.index.tolist() + test_scaled_df.index.tolist()
+    combined_df = pd.DataFrame(combined_scaled, index=combined_index, columns=all_features)
+
+    X, y = [], []
+    idx_target = len(date_features)  # ตำแหน่งของ value_column ใน target_features
+
+    for i in range(window_size, len(combined_df)):
+        X.append(combined_df.values[i - window_size:i, :])
+        y.append(combined_df.values[i, idx_target])
+
+    X = np.array(X)
+    y = np.array(y)
+
+    test_index = combined_df.index[window_size:][-days_to_remove:]
+    X_test = X[-days_to_remove:]
+    y_test = y[-days_to_remove:]
+
+    preds_test_scaled = model.predict(X_test).ravel()
 
     # สร้าง array เต็มเพื่อ inverse
-    predictions_full = np.zeros((len(predictions_scaled), len(all_features)))
-    predictions_full[:, idx_target] = predictions_scaled
+    predictions_full = np.zeros((len(preds_test_scaled), len(all_features)))
+    predictions_full[:, idx_target] = preds_test_scaled
 
     y_test_full = np.zeros((len(y_test), len(all_features)))
     y_test_full[:, idx_target] = y_test
@@ -209,7 +236,7 @@ def main():
     comparison = pd.DataFrame({
         'Actual': actual_inv,
         'Predicted': pred_inv
-    }, index=test_dates)
+    }, index=test_index)
 
     mae = np.mean(np.abs(comparison['Actual'] - comparison['Predicted']))
     rmse = np.sqrt(np.mean((comparison['Actual'] - comparison['Predicted'])**2))
@@ -220,7 +247,7 @@ def main():
     print(f"RMSE = {rmse:.4f}")
     print(f"MAPE = {mape:.2f}%")
 
-    comparison_path = 'models/lstm_comparison.csv'
+    comparison_path = os.path.join(model_folder, 'lstm_comparison.csv')
     comparison.to_csv(comparison_path)
     print(f"Comparison บันทึกที่ {comparison_path}")
 
@@ -232,8 +259,17 @@ def main():
     plt.xlabel('Date')
     plt.ylabel(value_column)
     plt.legend()
-    plt.savefig('models/actual_vs_predicted.png')
+    actual_vs_predicted_plot_path = os.path.join(model_folder, 'actual_vs_predicted.png')
+    plt.savefig(actual_vs_predicted_plot_path)
     plt.close()
+    print(f"Plot Actual vs Predicted บันทึกที่ {actual_vs_predicted_plot_path}")
+
+    return True
 
 if __name__ == "__main__":
-    main()
+    # ตัวอย่างการฝึกโมเดลสำหรับไฟล์ 'AUD.csv'
+    train_success = train_lstm_model('VND.csv')
+    if train_success:
+        print("การฝึกโมเดลสำเร็จ")
+    else:
+        print("การฝึกโมเดลล้มเหลว")

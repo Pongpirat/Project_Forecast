@@ -9,6 +9,7 @@ from models.exponential_smoothing import exponential_smoothing_model
 from models.moving_average import moving_average_model
 from models.sarima_model import sarima_model
 from models.lstm_inference import inference_lstm_model
+from train_lstm import train_lstm_model
 
 def main():
     st.set_page_config(page_title="Compare All Models", layout="wide")
@@ -38,6 +39,24 @@ def main():
 
         # เพิ่มตัวเลือกสำหรับจำนวนวันที่ต้องการพยากรณ์อนาคต
         forecast_days = st.number_input("ระบุจำนวนวันที่ต้องการพยากรณ์อนาคต", min_value=1, value=60)
+
+        st.markdown("---")
+
+        # ปุ่มสำหรับฝึกโมเดล LSTM ถ้าไม่พบโมเดล
+        base_filename = os.path.splitext(selected_preloaded_file)[0]
+        model_folder = os.path.join('models', base_filename)
+        model_path = os.path.join(model_folder, 'lstm_model.h5')
+        scaler_date_path = os.path.join(model_folder, 'scaler_lstm_date.pkl')
+        scaler_target_path = os.path.join(model_folder, 'scaler_lstm_target.pkl')
+
+        if not (os.path.exists(model_path) and os.path.exists(scaler_date_path) and os.path.exists(scaler_target_path)):
+            st.warning(f"ไม่พบโมเดล LSTM หรือ Scaler สำหรับไฟล์ '{selected_preloaded_file}'")
+            if st.button("ฝึกโมเดล LSTM สำหรับไฟล์นี้"):
+                train_success = train_lstm_model(selected_preloaded_file)
+                if train_success:
+                    st.success(f"ฝึกโมเดล LSTM สำเร็จสำหรับไฟล์ '{selected_preloaded_file}'")
+                else:
+                    st.error(f"การฝึกโมเดล LSTM ล้มเหลวสำหรับไฟล์ '{selected_preloaded_file}'")
 
     # โหลดไฟล์ CSV
     try:
@@ -123,14 +142,8 @@ def main():
     # (4) LSTM
     # ----------------------
     with st.spinner("กำลังรันโมเดล LSTM..."):
-        model_path = os.path.join('models', 'lstm_model.h5')
-        scaler_date_path = os.path.join('models', 'scaler_lstm_date.pkl')
-        scaler_target_path = os.path.join('models', 'scaler_lstm_target.pkl')
-
-        if (not os.path.exists(model_path) or
-            not os.path.exists(scaler_date_path) or
-            not os.path.exists(scaler_target_path)):
-            st.warning("ไม่พบไฟล์โมเดล LSTM หรือ Scaler. กรุณาฝึกโมเดล LSTM ให้เรียบร้อยก่อน.")
+        if not (os.path.exists(model_path) and os.path.exists(scaler_date_path) and os.path.exists(scaler_target_path)):
+            st.warning(f"ไม่สามารถรันโมเดล LSTM ได้ เนื่องจากไม่พบโมเดลหรือ Scaler สำหรับไฟล์ '{selected_preloaded_file}'")
         else:
             try:
                 # ใน LSTM เวลาทำนาย เราใช้ค่า 'อัตราขาย' (raw) แทน smoothed_value

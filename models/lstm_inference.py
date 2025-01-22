@@ -74,6 +74,7 @@ def inference_lstm_model(
 
     preds_test_scaled = model.predict(X_test).ravel()
 
+    # สร้าง array เต็มเพื่อ inverse
     predictions_full = np.zeros((len(preds_test_scaled), len(all_features)))
     predictions_full[:, idx_target] = preds_test_scaled
 
