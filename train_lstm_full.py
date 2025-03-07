@@ -11,6 +11,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
+# สมมติว่าไฟล์ data_processing.py อยู่ในโฟลเดอร์เดียวกัน
 from data_processing import process_data
 
 def train_lstm_full_model(selected_preloaded_file):
@@ -45,14 +46,13 @@ def train_lstm_full_model(selected_preloaded_file):
     df_processed['lag_2'] = df_processed[value_column].shift(2)
     df_processed.dropna(inplace=True)
 
-    # ใช้ข้อมูลทั้งหมดที่ผ่านการประมวลผล (ไม่แบ่งแยก Train/Test)
-    # เราจะใช้ข้อมูลทั้งหมดสำหรับการ fit Scaler เพื่อให้ครอบคลุมความผันผวนในช่วงท้าย
-    # กำหนด features
+    # เลือกใช้ข้อมูลทั้งหมดที่ผ่านการประมวลผล
+    # (ไม่แบ่งแยก Train/Test ตอนนี้ ใช้ทั้งชุดเพื่อ fit Scaler)
     date_features = ['day', 'month', 'year', 'week']
     target_features = [value_column, 'lag_1', 'lag_2']
     all_features = date_features + target_features
 
-    # 3) Fit Scaler บนข้อมูลทั้งหมดที่ผ่านการประมวลผล
+    # 3) Fit Scaler บนข้อมูลทั้งหมด
     scaler_date = MinMaxScaler()
     scaler_target = MinMaxScaler()
 
@@ -72,11 +72,12 @@ def train_lstm_full_model(selected_preloaded_file):
         X.append(train_values[i - window_size:i, :])
         y.append(train_values[i, idx_target])
         seq_dates.append(df_processed.index[i])
+
     X = np.array(X)
     y = np.array(y)
     seq_dates = np.array(seq_dates)
 
-    # แบ่ง Train/Validation แบบ 80:20
+    # แบ่ง Train/Validation 80:20
     split_idx = int(len(X) * 0.8)
     X_train = X[:split_idx]
     y_train = y[:split_idx]
@@ -85,15 +86,23 @@ def train_lstm_full_model(selected_preloaded_file):
     seq_dates_train = seq_dates[:split_idx]
     seq_dates_val = seq_dates[split_idx:]
 
-    # 5) สร้างโมเดล LSTM (ใช้สถาปัตยกรรมเดียวกับใน train_lstm.py)
+    # 5) สร้างโมเดล LSTM (ปรับให้ใหญ่ขึ้น: 512/256/128/64)
     model = Sequential([
-        Bidirectional(LSTM(256, return_sequences=True, activation='relu'),
-                      input_shape=(window_size, train_values.shape[1])),
+        Bidirectional(
+            LSTM(512, return_sequences=True, activation='relu'),
+            input_shape=(window_size, train_values.shape[1])
+        ),
         Dropout(0.3),
+
+        LSTM(256, return_sequences=True, activation='relu'),
+        Dropout(0.3),
+
         LSTM(128, return_sequences=True, activation='relu'),
         Dropout(0.3),
+
         LSTM(64, return_sequences=False, activation='relu'),
         Dropout(0.3),
+
         Dense(1)
     ])
 
@@ -117,7 +126,7 @@ def train_lstm_full_model(selected_preloaded_file):
     epochs = 500
     batch_size = 32
 
-    print("กำลังฝึกโมเดล LSTM (Full Data)...")
+    print("กำลังฝึกโมเดล LSTM (Full Data) ด้วยสถาปัตยกรรมขนาดใหญ่ขึ้น...")
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
@@ -148,7 +157,7 @@ def train_lstm_full_model(selected_preloaded_file):
     plt.figure(figsize=(10, 6))
     plt.plot(history.history['loss'], label='Train Loss')
     plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Model Loss (Full Data)')
+    plt.title('Model Loss (Full Data) - Large Architecture')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
@@ -202,8 +211,8 @@ def train_lstm_full_model(selected_preloaded_file):
     return True
 
 if __name__ == "__main__":
-    # ตัวอย่างการฝึกโมเดล LSTM สำหรับไฟล์ 'AUD.csv' โดยใช้ข้อมูลทั้งหมด (ไม่ตัด 30 วันออก)
-    success = train_lstm_full_model('HKD.csv')
+    # ตัวอย่างการฝึกโมเดล LSTM สำหรับไฟล์ 'JPY.csv' โดยใช้ข้อมูลทั้งหมด (ไม่ตัด 30 วันออก)
+    success = train_lstm_full_model('KHR.csv')
     if success:
         print("การฝึกโมเดลด้วยข้อมูลทั้งหมด (Full Data) สำเร็จ")
     else:
