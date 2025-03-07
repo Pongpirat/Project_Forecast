@@ -212,7 +212,7 @@ def train_lstm_full_model(selected_preloaded_file):
 
 if __name__ == "__main__":
     # ตัวอย่างการฝึกโมเดล LSTM สำหรับไฟล์ 'JPY.csv' โดยใช้ข้อมูลทั้งหมด (ไม่ตัด 30 วันออก)
-    success = train_lstm_full_model('KHR.csv')
+    success = train_lstm_full_model('INR.csv')
     if success:
         print("การฝึกโมเดลด้วยข้อมูลทั้งหมด (Full Data) สำเร็จ")
     else:
