@@ -242,21 +242,21 @@ def full_pipeline(
     # --------------------------
     # (Exponential Smoothing Full)
     try:
-        forecast_es = exponential_smoothing_full_model(processed_hist_df, 'อัตราขาย', 30)
+        forecast_es = exponential_smoothing_full_model(processed_hist_df, 'อัตราขาย', 365)
     except Exception as e:
         forecast_es = None
         print(f"[ERROR] Exponential Smoothing (Full Data): {e}")
 
     # (Moving Average Full)
     try:
-        forecast_ma = moving_average_full_model(processed_hist_df, 'อัตราขาย', 30, window_size=30, use_ema=True)
+        forecast_ma = moving_average_full_model(processed_hist_df, 'อัตราขาย', 365, window_size=30, use_ema=True)
     except Exception as e:
         forecast_ma = None
         print(f"[ERROR] Moving Average (Full Data): {e}")
 
     # (SARIMA Full)
     try:
-        forecast_sarima = sarima_full_model(processed_hist_df, 'อัตราขาย', 30,
+        forecast_sarima = sarima_full_model(processed_hist_df, 'อัตราขาย', 365,
                                             smooth_window=3,
                                             seasonal_order=(1, 1, 1, 7),
                                             order=(2, 1, 2))
@@ -281,7 +281,7 @@ def full_pipeline(
                 scaler_date_path=full_scaler_date_path,
                 scaler_target_path=full_scaler_target_path,
                 window_size=14,
-                forecast_days=30
+                forecast_days=365
             )
         except Exception as e:
             lstm_full_result_df = None

@@ -11,7 +11,7 @@ def inference_lstm_full_model(
     scaler_date_path,
     scaler_target_path,
     window_size,
-    forecast_days=30
+    forecast_days=365
 ):
     """
     Inference สำหรับโมเดล LSTM (Full Data) เพื่อทำนาย 30 วันข้างหน้า
