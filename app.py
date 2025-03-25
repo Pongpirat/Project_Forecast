@@ -497,27 +497,27 @@ def main():
         row_lstm  = find_metric_row(hist_metrics_data, "LSTM")
         st.markdown(render_historical_metric_card(
             "Exponential Smoothing",
-            row_exp['MAE'] if row_exp else "-",
-            row_exp['RMSE'] if row_exp else "-",
-            row_exp['MAPE'] if row_exp else "-"
+            "{:.4f}".format(row_exp['MAE']) if row_exp else "-",
+            "{:.4f}".format(row_exp['RMSE']) if row_exp else "-",
+            "{:.2f}%".format(row_exp['MAPE']) if row_exp else "-"
         ), unsafe_allow_html=True)
         st.markdown(render_historical_metric_card(
             "Moving Average (EMA)",
-            row_ma['MAE'] if row_ma else "-",
-            row_ma['RMSE'] if row_ma else "-",
-            row_ma['MAPE'] if row_ma else "-"
+            "{:.4f}".format(row_ma['MAE']) if row_ma else "-",
+            "{:.4f}".format(row_ma['RMSE']) if row_ma else "-",
+            "{:.2f}%".format(row_ma['MAPE']) if row_ma else "-"
         ), unsafe_allow_html=True)
         st.markdown(render_historical_metric_card(
             "SARIMA",
-            row_sarim['MAE'] if row_sarim else "-",
-            row_sarim['RMSE'] if row_sarim else "-",
-            row_sarim['MAPE'] if row_sarim else "-"
+            "{:.4f}".format(row_sarim['MAE']) if row_sarim else "-",
+            "{:.4f}".format(row_sarim['RMSE']) if row_sarim else "-",
+            "{:.2f}%".format(row_sarim['MAPE']) if row_sarim else "-"
         ), unsafe_allow_html=True)
         st.markdown(render_historical_metric_card(
             "LSTM",
-            row_lstm['MAE'] if row_lstm else "-",
-            row_lstm['RMSE'] if row_lstm else "-",
-            row_lstm['MAPE'] if row_lstm else "-"
+            "{:.4f}".format(row_lstm['MAE']) if row_lstm else "-",
+            "{:.4f}".format(row_lstm['RMSE']) if row_lstm else "-",
+            "{:.2f}%".format(row_lstm['MAPE']) if row_lstm else "-"
         ), unsafe_allow_html=True)
 
     # --------------------------------
@@ -634,13 +634,20 @@ def main():
         st.subheader("Metrics (Full Data Model)")
         cols_full = st.columns(4)
         order_full = ["Exp. Smoothing Full", "Moving Average Full", "SARIMA Full", "LSTM Full"]
+        
         for i, mname in enumerate(order_full):
             with cols_full[i]:
                 if mname in full_metrics:
                     mae_  = full_metrics[mname]['MAE']
                     rmse_ = full_metrics[mname]['RMSE']
                     mape_ = full_metrics[mname]['MAPE']
-                    st.markdown(render_historical_metric_card(mname, mae_, rmse_, mape_), unsafe_allow_html=True)
+                    
+                    # แสดง MAE, RMSE เป็นทศนิยม 4 ตำแหน่ง และ MAPE เป็นทศนิยม 2 ตำแหน่ง
+                    mae_display = "{:.4f}".format(mae_) if mae_ else "-"
+                    rmse_display = "{:.4f}".format(rmse_) if rmse_ else "-"
+                    mape_display = "{:.2f}".format(mape_) if mape_ else "-"
+                    
+                    st.markdown(render_historical_metric_card(mname, mae_display, rmse_display, mape_display), unsafe_allow_html=True)
                 else:
                     st.markdown(render_historical_metric_card(mname, "-", "-", "-"), unsafe_allow_html=True)
 
